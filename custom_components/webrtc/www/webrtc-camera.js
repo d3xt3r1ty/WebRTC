@@ -15,52 +15,6 @@ class WebRTCCamera extends VideoRTC {
         if (config.intersection === 0) this.visibilityThreshold = 0;
         else this.visibilityThreshold = config.intersection || 0.75;
 
-        /**
-         * @type {{
-         *     url: string,
-         *     entity: string,
-         *     mode: string,
-         *     media: string,
-         *
-         *     streams: Array<{
-         *         name: string,
-         *         url: string,
-         *         entity: string,
-         *         mode: string,
-         *         media: string,
-         *     }>,
-         *
-         *     title: string,
-         *     poster: string,
-         *     poster_remote: boolean,
-         *     muted: boolean,
-         *     intersection: number,
-         *     ui: boolean,
-         *     style: string,
-         *     background: boolean,
-         *
-         *     server: string,
-         *
-         *     mse: boolean,
-         *     webrtc: boolean,
-         *
-         *     digital_ptz:{
-         *         mouse_drag_pan: boolean,
-         *         mouse_wheel_zoom: boolean,
-         *         mouse_double_click_zoom: boolean,
-         *         touch_pinch_zoom: boolean,
-         *         touch_drag_pan: boolean,
-         *         touch_tap_drag_zoom: boolean,
-         *         persist: boolean|string,
-         *     },
-         *     ptz:{
-         *         opacity: number|string,
-         *         service: string,
-         *         data_left, data_up, data_right, data_down, data_zoom_in, data_zoom_out, data_home
-         *     },
-         *     shortcuts:Array<{ name:string, icon:string }>,
-         * }} config
-         */
         this.config = Object.assign({
             mode: config.mse === false ? 'webrtc' : config.webrtc === false ? 'mse' : this.mode,
             media: this.media,
@@ -77,25 +31,16 @@ class WebRTCCamera extends VideoRTC {
     set hass(hass) {
         this._hass = hass;
         this.onhass.forEach(fn => fn());
-        // if card in vertical stack - `hass` property assign after `onconnect`
-        // this.onconnect();
     }
 
     get hass() {
         return this._hass;
     }
 
-    /**
-     * Called by the Hass to calculate default card height.
-     */
     getCardSize() {
-        return 5; // x 50px
+        return 5;
     }
 
-    /**
-     * Called by the Hass to get defaul card config
-     * @return {{url: string}}
-     */
     static getStubConfig() {
         return {'url': ''};
     }
@@ -120,11 +65,10 @@ class WebRTCCamera extends VideoRTC {
 
         if (reload) {
             this.ondisconnect();
-            setTimeout(() => this.onconnect(), 100); // wait ws.close event
+            setTimeout(() => this.onconnect(), 100);
         }
     }
 
-    /** @return {string} */
     get streamName() {
         return this.config.streams[this.streamID].name || `S${this.streamID}`;
     }
@@ -133,6 +77,7 @@ class WebRTCCamera extends VideoRTC {
         super.oninit();
         this.renderMain();
         this.renderDigitalPTZ();
+        this.renderTapAction();
         this.renderPTZ();
         this.renderCustomUI();
         this.renderShortcuts();
@@ -226,10 +171,10 @@ class WebRTCCamera extends VideoRTC {
             .player {
                 background-color: black;
                 height: 100%;
-                position: relative; /* important for Safari */
+                position: relative;
             }
             .player:active {
-                cursor: move; /* important for zoom-controller */
+                cursor: move;
             }
             .player .ptz-transform {
                 height: 100%;
@@ -279,6 +224,91 @@ class WebRTCCamera extends VideoRTC {
             this.video,
             Object.assign({}, this.config.digital_ptz, {persist_key: this.config.url})
         );
+    }
+
+    navigate(path) {
+        if (!path) return;
+        history.pushState(null, '', path);
+        window.dispatchEvent(new CustomEvent('location-changed'));
+    }
+
+    renderTapAction() {
+        const action = this.config.tap_action;
+        if (!action || action.action !== 'navigate' || !action.navigation_path) return;
+
+        const player = this.querySelector('.player');
+        const activePointers = new Set();
+        const maxMove = 10;
+        const doubleTapMs = 400;
+        let startX = 0;
+        let startY = 0;
+        let moved = false;
+        let multiTouch = false;
+        let lastTap = 0;
+        let pendingNavigation = null;
+
+        const resetGesture = () => {
+            activePointers.clear();
+            moved = false;
+            multiTouch = false;
+        };
+
+        player.addEventListener('pointerdown', ev => {
+            if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+
+            if (pendingNavigation && ev.timeStamp - lastTap < doubleTapMs) {
+                clearTimeout(pendingNavigation);
+                pendingNavigation = null;
+            }
+
+            activePointers.add(ev.pointerId);
+            if (activePointers.size === 1) {
+                startX = ev.clientX;
+                startY = ev.clientY;
+                moved = false;
+                multiTouch = false;
+            } else {
+                multiTouch = true;
+            }
+        }, true);
+
+        player.addEventListener('pointermove', ev => {
+            if (!activePointers.has(ev.pointerId)) return;
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > maxMove) moved = true;
+        }, true);
+
+        player.addEventListener('pointerup', ev => {
+            if (!activePointers.has(ev.pointerId)) return;
+            activePointers.delete(ev.pointerId);
+
+            if (activePointers.size > 0) {
+                multiTouch = true;
+                return;
+            }
+
+            const isTap = !moved && !multiTouch &&
+                Math.hypot(ev.clientX - startX, ev.clientY - startY) <= maxMove;
+
+            moved = false;
+            multiTouch = false;
+
+            if (!isTap) return;
+
+            if (ev.timeStamp - lastTap < doubleTapMs) {
+                if (pendingNavigation) clearTimeout(pendingNavigation);
+                pendingNavigation = null;
+                lastTap = 0;
+                return;
+            }
+
+            lastTap = ev.timeStamp;
+            pendingNavigation = setTimeout(() => {
+                pendingNavigation = null;
+                this.navigate(action.navigation_path);
+            }, doubleTapMs);
+        }, true);
+
+        player.addEventListener('pointercancel', resetGesture, true);
     }
 
     renderPTZ() {
@@ -341,48 +371,13 @@ class WebRTCCamera extends VideoRTC {
                     align-self: center;
                     display: ${hasHome ? 'block' : 'none'};
                 }
-                .up {
-                    position: absolute;
-                    top: 5px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                }
-                .down {
-                    position: absolute;
-                    bottom: 5px;
-                    left: 50%;
-                    transform: translateX(-50%);
-                }
-                .left {
-                    position: absolute;
-                    left: 5px;
-                    top: 50%;
-                    transform: translateY(-50%);
-                }
-                .right {
-                    position: absolute;
-                    right: 5px;
-                    top: 50%;
-                    transform: translateY(-50%);
-                }
-                .zoom_out {
-                    position: absolute;
-                    left: 5px;
-                    top: 50%;
-                    transform: translateY(-50%);
-                }
-                .zoom_in {
-                    position: absolute;
-                    right: 5px;
-                    top: 50%;
-                    transform: translateY(-50%);
-                }
-                .home {
-                    position: absolute;
-                    top: 50%;
-                    left: 50%;
-                    transform: translate(-50%, -50%);
-                }
+                .up { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); }
+                .down { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); }
+                .left { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); }
+                .right { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
+                .zoom_out { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); }
+                .zoom_in { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
+                .home { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
             </style>
         `);
         card.insertAdjacentHTML('beforeend', `
@@ -472,12 +467,8 @@ class WebRTCCamera extends VideoRTC {
                     bottom: 5px;
                     display: flex;
                 }
-                .space {
-                    width: 100%;
-                }
-                .volume {
-                    display: none;
-                }
+                .space { width: 100%; }
+                .volume { display: none; }
                 .stream {
                     padding-top: 2px;
                     margin-left: 2px;
@@ -520,7 +511,7 @@ class WebRTCCamera extends VideoRTC {
                 }
             });
             video.addEventListener('webkitendfullscreen', () => {
-                setTimeout(() => this.play(), 1000); // fix bug in iOS
+                setTimeout(() => this.play(), 1000);
             });
         } else {
             fullscreen.style.display = 'none';
@@ -567,20 +558,12 @@ class WebRTCCamera extends VideoRTC {
         });
 
         const spinner = this.querySelector('.spinner');
-        video.addEventListener('waiting', () => {
-            spinner.style.display = 'block';
-        });
-        video.addEventListener('playing', () => {
-            spinner.style.display = 'none';
-        });
+        video.addEventListener('waiting', () => { spinner.style.display = 'block'; });
+        video.addEventListener('playing', () => { spinner.style.display = 'none'; });
 
         const play = this.querySelector('.play');
-        video.addEventListener('play', () => {
-            play.style.display = 'none';
-        });
-        video.addEventListener('pause', () => {
-            play.style.display = 'block';
-        });
+        video.addEventListener('play', () => { play.style.display = 'none'; });
+        video.addEventListener('pause', () => { play.style.display = 'block'; });
 
         const volume = this.querySelector('.volume');
         video.addEventListener('loadeddata', () => {
@@ -611,7 +594,15 @@ class WebRTCCamera extends VideoRTC {
 
         const shortcuts = this.querySelector('.shortcuts');
         shortcuts.addEventListener('click', ev => {
-            const value = this.config.shortcuts[ev.target.dataset.index];
+            const index = ev.target.dataset.index;
+            if (index === undefined) return;
+            const value = this.config.shortcuts[index];
+
+            if (value.tap_action && value.tap_action.action === 'navigate') {
+                this.navigate(value.tap_action.navigation_path);
+                return;
+            }
+
             if (value.more_info !== undefined) {
                 const event = new Event('hass-more-info', {
                     bubbles: true,
@@ -648,9 +639,7 @@ class WebRTCCamera extends VideoRTC {
 
     renderTemplate(name, renderHTML) {
         const config = this.config[name];
-        // support config param as string or as object
         const template = typeof config === 'string' ? config : JSON.stringify(config);
-        // check if config param has template
         if (template.indexOf('${') >= 0) {
             const render = () => {
                 try {
@@ -685,7 +674,5 @@ const card = {
     preview: false,
     description: 'WebRTC camera allows you to view the stream of almost any camera without delay',
 };
-// Apple iOS 12 doesn't support `||=`
 if (window.customCards) window.customCards.push(card);
 else window.customCards = [card];
-

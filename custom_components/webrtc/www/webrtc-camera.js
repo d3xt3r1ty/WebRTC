@@ -236,6 +236,10 @@ class WebRTCCamera extends VideoRTC {
         const action = this.config.tap_action;
         if (!action || action.action !== 'navigate' || !action.navigation_path) return;
 
+        // Native media controls intercept single taps/clicks (pause, seek, mute,
+        // fullscreen). A card-level tap action owns the video surface instead.
+        this.video.controls = false;
+
         const player = this.querySelector('.player');
         const activePointers = new Set();
         const maxMove = 10;

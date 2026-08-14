@@ -1,0 +1,27 @@
+name: Run nav.8 patch
+
+on:
+  push:
+    branches: [fix/joystick-publish-heartbeat]
+    paths:
+      - .github/workflows/run-nav8-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/joystick-publish-heartbeat
+      - run: python tools/patch_nav8.py
+      - run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - run: node --check custom_components/webrtc/www/digital-ptz.js
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/webrtc
+          git commit -m "Fix joystick publishing and add static image digital PTZ"
+          git push origin fix/joystick-publish-heartbeat

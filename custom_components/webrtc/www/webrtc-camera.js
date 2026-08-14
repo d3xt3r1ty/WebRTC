@@ -305,11 +305,18 @@ class WebRTCCamera extends VideoRTC {
         if (this.config.digital_ptz === false) return;
         const media = this.imageMode ? this.staticImage : this.video;
         const digitalOptions = Object.assign({}, this.config.digital_ptz, {persist_key: this.config.image || this.config.url});
-        const hasPhysicalWheelZoom = Boolean(
+        const hasJoystickWheelZoom = Boolean(
+            this.config.ptz?.service &&
+            this.config.ptz?.joystick &&
+            this.config.ptz?.data_joystick &&
+            this.config.ptz?.data_joystick_stop
+        );
+        const hasLegacyWheelZoom = Boolean(
             this.config.ptz?.service &&
             this.config.ptz?.data_start_zoom_in && this.config.ptz?.data_end_zoom_in &&
             this.config.ptz?.data_start_zoom_out && this.config.ptz?.data_end_zoom_out
         );
+        const hasPhysicalWheelZoom = hasJoystickWheelZoom || hasLegacyWheelZoom;
         if (hasPhysicalWheelZoom) digitalOptions.mouse_wheel_zoom = false;
         this.digitalPTZ = new DigitalPTZ(
             this.querySelector('.player'),
@@ -785,11 +792,12 @@ class WebRTCCamera extends VideoRTC {
         // Ctrl+wheel enters DigitalPTZ, and once digitally zoomed the wheel
         // remains digital regardless of whether Ctrl stays pressed. Pinch remains
         // handled by DigitalPTZ and is always digital.
-        const hasPhysicalWheelZoom = Boolean(
+        const hasLegacyPhysicalWheelZoom = Boolean(
             this.config.ptz.data_start_zoom_in && this.config.ptz.data_end_zoom_in &&
             this.config.ptz.data_start_zoom_out && this.config.ptz.data_end_zoom_out
         );
-        if (hasPhysicalWheelZoom && this.digitalPTZ) {
+        const hasPhysicalWheelZoom = joystickEnabled || hasLegacyPhysicalWheelZoom;
+        if (hasPhysicalWheelZoom) {
             let wheelStopTimer = null;
             let wheelDirection = null;
             const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms ?? 180));
@@ -797,7 +805,7 @@ class WebRTCCamera extends VideoRTC {
             const wheelUsesJoystick = joystickEnabled && wheelZoomSpeed > 0;
             player.addEventListener('wheel', ev => {
                 const digitallyZoomed = isDigitallyZoomed();
-                if (digitallyZoomed || ev.ctrlKey) {
+                if (this.digitalPTZ && (digitallyZoomed || ev.ctrlKey)) {
                     const zoom = 1 - ev.deltaY / 1000;
                     this.digitalPTZ.transform.zoomAtCoords(zoom, ev.pageX, ev.pageY);
                     this.digitalPTZ.render();
@@ -841,6 +849,7 @@ class WebRTCCamera extends VideoRTC {
 
         for (const [startEvent, endEvent] of [['touchstart','touchend'],['mousedown','mouseup']]) {
             ptz.addEventListener(startEvent, startEvt => {
+                if (startEvt.target.closest?.('.ptz-zoom-slider')) return;
                 if (joystickEnabled && startEvt.target.closest?.('.ptz-move')) return;
                 const {className}=startEvt.target; startEvt.preventDefault(); handle('start_'+className);
                 window.addEventListener(endEvent, endEvt => { endEvt.preventDefault(); handle('end_'+className); if(endEvt.timeStamp-startEvt.timeStamp>400)handle('long_'+className); else handle(className); }, {once:true});

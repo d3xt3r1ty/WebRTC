@@ -1,0 +1,26 @@
+name: Run static image PTZ init fix
+
+on:
+  push:
+    branches: [fix/static-image-digital-ptz-init]
+    paths:
+      - .github/workflows/run-static-image-ptz-init-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/static-image-digital-ptz-init
+      - run: python tools/patch_static_image_ptz_init.py
+      - run: node --check custom_components/webrtc/www/digital-ptz.js
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/webrtc
+          git commit -m "Fix static image DigitalPTZ initialization"
+          git push origin fix/static-image-digital-ptz-init

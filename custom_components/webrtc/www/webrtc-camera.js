@@ -304,7 +304,7 @@ class WebRTCCamera extends VideoRTC {
     renderDigitalPTZ() {
         if (this.config.digital_ptz === false) return;
         const media = this.imageMode ? this.staticImage : this.video;
-        new DigitalPTZ(
+        this.digitalPTZ = new DigitalPTZ(
             this.querySelector('.player'),
             this.querySelector('.player .ptz-transform'),
             media,
@@ -499,6 +499,11 @@ class WebRTCCamera extends VideoRTC {
             this.config.ptz.data_joystick &&
             this.config.ptz.data_joystick_stop
         );
+        const physicalDrag = joystickEnabled && this.config.ptz.physical_drag !== false;
+        const joystickMode = String(this.config.ptz.joystick_mode || 'dynamic').toLowerCase();
+        const dynamicJoystick = physicalDrag && joystickMode === 'dynamic';
+        const keyboardEnabled = joystickEnabled && this.config.ptz.keyboard !== false;
+
         let hasMove = joystickEnabled;
         let hasZoom = false;
         let hasHome = false;
@@ -507,121 +512,10 @@ class WebRTCCamera extends VideoRTC {
             hasMove = hasMove || this.config.ptz['data' + prefix + '_left'];
             hasMove = hasMove || this.config.ptz['data' + prefix + '_up'];
             hasMove = hasMove || this.config.ptz['data' + prefix + '_down'];
-
             hasZoom = hasZoom || this.config.ptz['data' + prefix + '_zoom_in'];
             hasZoom = hasZoom || this.config.ptz['data' + prefix + '_zoom_out'];
-
             hasHome = hasHome || this.config.ptz['data' + prefix + '_home'];
         }
-
-        const card = this.querySelector('.card');
-        card.insertAdjacentHTML('beforebegin', `
-            <style>
-                .ptz {
-                    position: absolute;
-                    top: 50%;
-                    right: 10px;
-                    transform: translateY(-50%);
-                    display: flex;
-                    flex-direction: column;
-                    gap: 10px;
-                    transition: opacity .3s ease-in-out;
-                    opacity: ${parseFloat(this.config.ptz.opacity) || 0.4};
-                    z-index: 4;
-                }
-                .ptz:hover {
-                    opacity: 1 !important;
-                }
-                .ptz-move {
-                    position: relative;
-                    background-color: rgba(0, 0, 0, 0.3);
-                    border-radius: 50%;
-                    width: 80px;
-                    height: 80px;
-                    display: ${hasMove ? 'block' : 'none'};
-                    touch-action: none;
-                    user-select: none;
-                }
-                .ptz-move.joystick {
-                    box-sizing: border-box;
-                    border: 1px solid rgba(255, 255, 255, 0.28);
-                    cursor: grab;
-                }
-                .ptz-move.joystick:active {
-                    cursor: grabbing;
-                }
-                .ptz-stick {
-                    position: absolute;
-                    width: 28px;
-                    height: 28px;
-                    left: 26px;
-                    top: 26px;
-                    box-sizing: border-box;
-                    border-radius: 50%;
-                    border: 1px solid rgba(255, 255, 255, 0.7);
-                    background-color: rgba(0, 0, 0, 0.45);
-                    pointer-events: none;
-                    transform: translate(0, 0);
-                    transition: transform 60ms linear;
-                }
-                .ptz-centre {
-                    position: absolute;
-                    width: 4px;
-                    height: 4px;
-                    left: 38px;
-                    top: 38px;
-                    border-radius: 50%;
-                    background-color: rgba(255, 255, 255, 0.65);
-                    pointer-events: none;
-                }
-                .ptz-zoom {
-                    position: relative;
-                    width: 80px;
-                    height: 40px;
-                    background-color: rgba(0, 0, 0, 0.3);
-                    border-radius: 4px;
-                    display: ${hasZoom ? 'block' : 'none'};
-                }
-                .ptz-home {
-                    position: relative;
-                    width: 40px;
-                    height: 40px;
-                    background-color: rgba(0, 0, 0, 0.3);
-                    border-radius: 4px;
-                    align-self: center;
-                    display: ${hasHome ? 'block' : 'none'};
-                }
-                .up { position: absolute; top: 5px; left: 50%; transform: translateX(-50%); }
-                .down { position: absolute; bottom: 5px; left: 50%; transform: translateX(-50%); }
-                .left { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); }
-                .right { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
-                .zoom_out { position: absolute; left: 5px; top: 50%; transform: translateY(-50%); }
-                .zoom_in { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); }
-                .home { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); }
-            </style>
-        `);
-        card.insertAdjacentHTML('beforeend', `
-            <div class="ptz">
-                <div class="ptz-move ${joystickEnabled ? 'joystick' : ''}">
-                    ${joystickEnabled ? `
-                        <div class="ptz-centre"></div>
-                        <div class="ptz-stick"></div>
-                    ` : `
-                        <ha-icon class="right" icon="mdi:arrow-right"></ha-icon>
-                        <ha-icon class="left" icon="mdi:arrow-left"></ha-icon>
-                        <ha-icon class="up" icon="mdi:arrow-up"></ha-icon>
-                        <ha-icon class="down" icon="mdi:arrow-down"></ha-icon>
-                    `}
-                </div>
-                <div class="ptz-zoom">
-                    <ha-icon class="zoom_in" icon="mdi:plus"></ha-icon>
-                    <ha-icon class="zoom_out" icon="mdi:minus"></ha-icon>
-                </div>
-                <div class="ptz-home">
-                    <ha-icon class="home" icon="mdi:home"></ha-icon>
-                </div>
-            </div>
-        `);
 
         const handle = (path, vars = {}) => {
             const dataTemplate = this.config.ptz['data_' + path];
@@ -643,146 +537,178 @@ class WebRTCCamera extends VideoRTC {
                 return value;
             };
             const [domain, service] = String(this.config.ptz.service).split('.', 2);
-            if (!domain || !service) {
-                console.error('WebRTC PTZ: invalid service', this.config.ptz.service);
-                return;
-            }
+            if (!domain || !service) return console.error('WebRTC PTZ: invalid service', this.config.ptz.service);
             const data = substitute(dataTemplate);
             this.hass.callService(domain, service, data).catch(err =>
-                console.error(`WebRTC PTZ ${path} service call failed`, err, data)
-            );
+                console.error(`WebRTC PTZ ${path} service call failed`, err, data));
         };
 
+        const card = this.querySelector('.card');
+        const player = this.querySelector('.player');
+        const position = String(this.config.ptz.position || (dynamicJoystick ? 'center-right' : 'center-right')).toLowerCase();
+        const offsetX = Number(this.config.ptz.offset_x ?? 10);
+        const offsetY = Number(this.config.ptz.offset_y ?? 10);
+        const anchors = {
+            'top-left': `top:${offsetY}px;left:${offsetX}px;`,
+            'top-center': `top:${offsetY}px;left:50%;transform:translateX(-50%);`,
+            'top-right': `top:${offsetY}px;right:${offsetX}px;`,
+            'center-left': `top:50%;left:${offsetX}px;transform:translateY(-50%);`,
+            'center': 'top:50%;left:50%;transform:translate(-50%,-50%);',
+            'center-right': `top:50%;right:${offsetX}px;transform:translateY(-50%);`,
+            'bottom-left': `bottom:${offsetY}px;left:${offsetX}px;`,
+            'bottom-center': `bottom:${offsetY}px;left:50%;transform:translateX(-50%);`,
+            'bottom-right': `bottom:${offsetY}px;right:${offsetX}px;`,
+        };
+        const anchorCSS = anchors[position] || anchors['center-right'];
+        const fixedRadius = Math.max(40, Number(this.config.ptz.joystick_radius || 60));
+        const fixedDiameter = fixedRadius * 2;
+
+        card.insertAdjacentHTML('beforebegin', `
+            <style>
+                .ptz { position:absolute; ${anchorCSS} display:flex; flex-direction:column; gap:10px; transition:opacity .3s ease-in-out; opacity:${parseFloat(this.config.ptz.opacity) || 0.4}; z-index:4; }
+                .ptz:hover { opacity:1 !important; }
+                .ptz-move { position:relative; background:rgba(0,0,0,.3); border-radius:50%; width:${fixedDiameter}px; height:${fixedDiameter}px; display:${hasMove && !dynamicJoystick ? 'block' : 'none'}; touch-action:none; user-select:none; box-sizing:border-box; }
+                .ptz-move.joystick { border:1px solid rgba(255,255,255,.28); cursor:grab; }
+                .ptz-stick { position:absolute; width:30px; height:30px; left:50%; top:50%; margin:-15px 0 0 -15px; border:1px solid rgba(255,255,255,.7); background:rgba(0,0,0,.45); border-radius:50%; pointer-events:none; }
+                .ptz-centre { position:absolute; width:6px; height:6px; left:50%; top:50%; margin:-3px; border-radius:50%; background:rgba(255,255,255,.65); pointer-events:none; }
+                .ptz-dynamic { position:absolute; display:none; border:1px solid rgba(255,255,255,.4); background:rgba(0,0,0,.18); border-radius:50%; box-sizing:border-box; z-index:5; pointer-events:none; }
+                .ptz-dynamic .ptz-stick { transition:transform 40ms linear; }
+                .ptz-deadband { position:absolute; left:50%; top:50%; border:1px dashed rgba(255,255,255,.32); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; }
+                .ptz-zoom { position:relative; width:80px; height:40px; background:rgba(0,0,0,.3); border-radius:4px; display:${hasZoom ? 'block' : 'none'}; }
+                .ptz-home { position:relative; width:40px; height:40px; background:rgba(0,0,0,.3); border-radius:4px; align-self:center; display:${hasHome ? 'block' : 'none'}; }
+                .up { position:absolute; top:5px; left:50%; transform:translateX(-50%); }.down { position:absolute; bottom:5px; left:50%; transform:translateX(-50%); }.left { position:absolute; left:5px; top:50%; transform:translateY(-50%); }.right { position:absolute; right:5px; top:50%; transform:translateY(-50%); }
+                .zoom_out { position:absolute; left:5px; top:50%; transform:translateY(-50%); }.zoom_in { position:absolute; right:5px; top:50%; transform:translateY(-50%); }.home { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); }
+            </style>`);
+        card.insertAdjacentHTML('beforeend', `
+            <div class="ptz">
+                <div class="ptz-move ${joystickEnabled ? 'joystick' : ''}">${joystickEnabled ? '<div class="ptz-centre"></div><div class="ptz-stick"></div>' : '<ha-icon class="right" icon="mdi:arrow-right"></ha-icon><ha-icon class="left" icon="mdi:arrow-left"></ha-icon><ha-icon class="up" icon="mdi:arrow-up"></ha-icon><ha-icon class="down" icon="mdi:arrow-down"></ha-icon>'}</div>
+                <div class="ptz-zoom"><ha-icon class="zoom_in" icon="mdi:plus"></ha-icon><ha-icon class="zoom_out" icon="mdi:minus"></ha-icon></div>
+                <div class="ptz-home"><ha-icon class="home" icon="mdi:home"></ha-icon></div>
+            </div>
+            <div class="ptz-dynamic"><div class="ptz-deadband"></div><div class="ptz-centre"></div><div class="ptz-stick"></div></div>`);
+
         const ptz = this.querySelector('.ptz');
+        const fixedMove = this.querySelector('.ptz-move');
+        const dynamicMove = this.querySelector('.ptz-dynamic');
+        const isDigitallyZoomed = () => Boolean(this.digitalPTZ && this.digitalPTZ.transform && this.digitalPTZ.transform.scale > 1.001);
 
         if (joystickEnabled) {
-            const move = this.querySelector('.ptz-move');
-            const stick = this.querySelector('.ptz-stick');
-            const deadzone = Math.max(0, Math.min(0.8, parseFloat(this.config.ptz.joystick_deadzone) || 0.16));
+            const surface = dynamicJoystick ? player : fixedMove;
+            let activePointer = null, originX = 0, originY = 0, moving = false;
+            let lastPan = 0, lastTilt = 0, lastSpeed = 0, lastSend = 0, heartbeat = null;
+            let radius = fixedRadius, deadbandPx = 14;
+            const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);
+            const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);
             const minSpeed = Math.max(0, Math.min(1, parseFloat(this.config.ptz.joystick_min_speed) || 0.12));
             const curve = Math.max(0.2, parseFloat(this.config.ptz.joystick_curve) || 1.35);
-            const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 120);
-            let activePointer = null;
-            let moving = false;
-            let lastSend = 0;
-            let lastPan = 0;
-            let lastTilt = 0;
-            let lastSpeed = 0;
-            let heartbeat = null;
 
-            const resetStick = () => {
-                stick.style.transform = 'translate(0px, 0px)';
-            };
-
+            const hideDynamic = () => { if (dynamicJoystick) dynamicMove.style.display = 'none'; };
             const stopMove = () => {
                 if (heartbeat) clearInterval(heartbeat);
                 heartbeat = null;
                 if (moving) handle('joystick_stop');
-                moving = false;
-                lastPan = 0;
-                lastTilt = 0;
-                lastSpeed = 0;
-                resetStick();
+                moving = false; lastPan = lastTilt = lastSpeed = 0;
+                const stick = (dynamicJoystick ? dynamicMove : fixedMove).querySelector('.ptz-stick');
+                if (stick) stick.style.transform = 'translate(0px,0px)';
+                hideDynamic();
             };
-
             const startHeartbeat = () => {
                 if (heartbeat) return;
                 heartbeat = setInterval(() => {
                     if (activePointer === null || !moving) return;
-                    handle('joystick', {pan: lastPan, tilt: lastTilt, zoom: 0, speed: lastSpeed});
+                    handle('joystick', {pan:lastPan, tilt:lastTilt, zoom:0, speed:lastSpeed});
                     lastSend = performance.now();
-                }, updateMs);
+                }, heartbeatMs);
             };
-
-            const updateJoystick = (ev, force = false) => {
-                const rect = move.getBoundingClientRect();
-                const dx = ev.clientX - (rect.left + rect.width / 2);
-                const dy = ev.clientY - (rect.top + rect.height / 2);
-                const maxDistance = Math.max(1, rect.width / 2 - 14);
-                const distance = Math.hypot(dx, dy);
-                const visualScale = Math.min(1, distance / maxDistance);
-                const visualX = distance ? dx / distance * maxDistance * visualScale : 0;
-                const visualY = distance ? dy / distance * maxDistance * visualScale : 0;
-                stick.style.transform = `translate(${visualX.toFixed(1)}px, ${visualY.toFixed(1)}px)`;
-
-                const radial = Math.min(1, distance / maxDistance);
-                if (radial <= deadzone || distance === 0) {
-                    if (moving) {
-                        handle('joystick_stop');
-                        moving = false;
-                        lastPan = 0;
-                        lastTilt = 0;
-                        lastSpeed = 0;
-                        if (heartbeat) clearInterval(heartbeat);
-                        heartbeat = null;
-                    }
-                    return;
-                }
-
-                const normalized = Math.min(1, (radial - deadzone) / (1 - deadzone));
-                const magnitude = minSpeed + (1 - minSpeed) * Math.pow(normalized, curve);
-                const pan = dx / distance * magnitude;
-                const tilt = -dy / distance * magnitude;
-                const now = performance.now();
-                const changed = Math.hypot(pan - lastPan, tilt - lastTilt) >= 0.04;
-                if (force || (changed && now - lastSend >= updateMs)) {
-                    handle('joystick', {pan, tilt, zoom: 0, speed: magnitude});
-                    lastSend = now;
-                    lastPan = pan;
-                    lastTilt = tilt;
-                    lastSpeed = magnitude;
-                    moving = true;
-                    startHeartbeat();
-                }
-            };
-
-            move.addEventListener('pointerdown', ev => {
+            const begin = ev => {
                 if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-                ev.preventDefault();
-                ev.stopPropagation();
+                if (dynamicJoystick && isDigitallyZoomed()) return;
                 activePointer = ev.pointerId;
-                move.setPointerCapture(ev.pointerId);
-                updateJoystick(ev, true);
-            });
-            move.addEventListener('pointermove', ev => {
-                if (activePointer !== ev.pointerId) return;
-                ev.preventDefault();
-                ev.stopPropagation();
-                updateJoystick(ev);
-            });
-            const finish = ev => {
-                if (activePointer !== null && ev.pointerId !== activePointer) return;
-                ev.preventDefault();
-                ev.stopPropagation();
-                activePointer = null;
-                stopMove();
-            };
-            move.addEventListener('pointerup', finish);
-            move.addEventListener('pointercancel', finish);
-            move.addEventListener('lostpointercapture', ev => {
-                if (activePointer === ev.pointerId) {
-                    activePointer = null;
-                    stopMove();
+                originX = ev.clientX; originY = ev.clientY;
+                radius = Math.max(40, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_radius_touch || 90) : (this.config.ptz.joystick_radius || 60)));
+                deadbandPx = Math.max(4, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_deadband_touch || 24) : (this.config.ptz.joystick_deadband || 14)));
+                if (dynamicJoystick) {
+                    const rect = player.getBoundingClientRect();
+                    dynamicMove.style.width = `${radius*2}px`; dynamicMove.style.height = `${radius*2}px`;
+                    dynamicMove.style.left = `${originX - rect.left}px`; dynamicMove.style.top = `${originY - rect.top}px`;
+                    dynamicMove.style.transform = 'translate(-50%,-50%)'; dynamicMove.style.display = 'block';
+                    const db = dynamicMove.querySelector('.ptz-deadband'); db.style.width = `${deadbandPx*2}px`; db.style.height = `${deadbandPx*2}px`;
                 }
-            });
+                player.focus({preventScroll:true});
+                surface.setPointerCapture?.(ev.pointerId);
+                ev.preventDefault(); ev.stopPropagation();
+            };
+            const move = ev => {
+                if (activePointer !== ev.pointerId) return;
+                const dx = ev.clientX-originX, dy = ev.clientY-originY, dist = Math.hypot(dx,dy);
+                const ctl = dynamicJoystick ? dynamicMove : fixedMove;
+                const stick = ctl.querySelector('.ptz-stick');
+                const visual = Math.min(radius, dist);
+                if (stick) stick.style.transform = dist ? `translate(${(dx/dist*visual).toFixed(1)}px,${(dy/dist*visual).toFixed(1)}px)` : 'translate(0,0)';
+                if (dist <= deadbandPx) {
+                    if (moving) { handle('joystick_stop'); moving=false; if (heartbeat) clearInterval(heartbeat); heartbeat=null; }
+                    ev.preventDefault(); ev.stopPropagation(); return;
+                }
+                const norm = Math.min(1, (dist-deadbandPx)/Math.max(1,radius-deadbandPx));
+                const magnitude = minSpeed + (1-minSpeed)*Math.pow(norm,curve);
+                const pan = dx/dist*magnitude, tilt = -dy/dist*magnitude;
+                const now=performance.now(), changed=Math.hypot(pan-lastPan,tilt-lastTilt)>=0.03;
+                if (!moving || (changed && now-lastSend>=updateMs)) {
+                    handle('joystick',{pan,tilt,zoom:0,speed:magnitude});
+                    lastPan=pan; lastTilt=tilt; lastSpeed=magnitude; lastSend=now; moving=true; startHeartbeat();
+                }
+                ev.preventDefault(); ev.stopPropagation();
+            };
+            const end = ev => {
+                if (activePointer === null || ev.pointerId !== activePointer) return;
+                activePointer=null; stopMove(); ev.preventDefault(); ev.stopPropagation();
+            };
+            surface.addEventListener('pointerdown', begin, true);
+            surface.addEventListener('pointermove', move, true);
+            surface.addEventListener('pointerup', end, true);
+            surface.addEventListener('pointercancel', end, true);
+            surface.addEventListener('lostpointercapture', ev => { if (activePointer===ev.pointerId) { activePointer=null; stopMove(); } });
+
+            if (keyboardEnabled) {
+                if (!player.hasAttribute('tabindex')) player.tabIndex = 0;
+                const held = new Set();
+                let keyTimer = null, keyStarted = 0, keyLastSend = 0, keyPan = 0, keyTilt = 0;
+                const initial = Math.max(0.01, Math.min(1, Number(this.config.ptz.keyboard_initial_speed || 0.12)));
+                const maximum = Math.max(initial, Math.min(1, Number(this.config.ptz.keyboard_max_speed || 0.65)));
+                const rampMs = Math.max(0, Number(this.config.ptz.keyboard_ramp_ms || 1500));
+                const tick = force => {
+                    let x=(held.has('ArrowRight')?1:0)-(held.has('ArrowLeft')?1:0);
+                    let y=(held.has('ArrowUp')?1:0)-(held.has('ArrowDown')?1:0);
+                    if (!x && !y) { if (keyPan || keyTilt) handle('joystick_stop'); keyPan=keyTilt=0; return; }
+                    const len=Math.hypot(x,y); x/=len; y/=len;
+                    const elapsed=performance.now()-keyStarted;
+                    const speed=initial+(maximum-initial)*(rampMs ? Math.min(1,elapsed/rampMs) : 1);
+                    const pan=x*speed, tilt=y*speed, now=performance.now();
+                    if (force || Math.hypot(pan-keyPan,tilt-keyTilt)>=0.025 || now-keyLastSend>=heartbeatMs) {
+                        handle('joystick',{pan,tilt,zoom:0,speed}); keyPan=pan; keyTilt=tilt; keyLastSend=now;
+                    }
+                };
+                player.addEventListener('keydown', ev => {
+                    if (ev.key === 'Escape') { held.clear(); tick(true); if(keyTimer)clearInterval(keyTimer); keyTimer=null; player.blur(); ev.preventDefault(); return; }
+                    if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(ev.key)) return;
+                    if (!held.size) keyStarted=performance.now(); held.add(ev.key); tick(true);
+                    if (!keyTimer) keyTimer=setInterval(()=>tick(false),100);
+                    ev.preventDefault(); ev.stopPropagation();
+                });
+                player.addEventListener('keyup', ev => {
+                    if (!held.has(ev.key)) return; held.delete(ev.key); tick(true);
+                    if (!held.size && keyTimer) { clearInterval(keyTimer); keyTimer=null; }
+                    ev.preventDefault(); ev.stopPropagation();
+                });
+                player.addEventListener('blur', () => { if (held.size) { held.clear(); tick(true); } if(keyTimer)clearInterval(keyTimer); keyTimer=null; });
+            }
         }
 
-        // Keep the legacy buttons for zoom/home and for non-joystick PTZ configs.
-        for (const [startEvent, endEvent] of [['touchstart', 'touchend'], ['mousedown', 'mouseup']]) {
+        for (const [startEvent, endEvent] of [['touchstart','touchend'],['mousedown','mouseup']]) {
             ptz.addEventListener(startEvent, startEvt => {
                 if (joystickEnabled && startEvt.target.closest?.('.ptz-move')) return;
-                const {className} = startEvt.target;
-                startEvt.preventDefault();
-                handle('start_' + className);
-                window.addEventListener(endEvent, endEvt => {
-                    endEvt.preventDefault();
-                    handle('end_' + className);
-                    if (endEvt.timeStamp - startEvt.timeStamp > 400) {
-                        handle('long_' + className);
-                    } else {
-                        handle(className);
-                    }
-                }, {once: true});
+                const {className}=startEvt.target; startEvt.preventDefault(); handle('start_'+className);
+                window.addEventListener(endEvent, endEvt => { endEvt.preventDefault(); handle('end_'+className); if(endEvt.timeStamp-startEvt.timeStamp>400)handle('long_'+className); else handle(className); }, {once:true});
             });
         }
     }

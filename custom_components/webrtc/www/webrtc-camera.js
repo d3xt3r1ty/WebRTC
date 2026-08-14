@@ -80,6 +80,7 @@ class WebRTCCamera extends VideoRTC {
         this.renderActions();
         this.renderPTZ();
         this.renderCustomUI();
+        this.renderAudioControl();
         this.renderShortcuts();
         this.renderStyle();
     }
@@ -671,6 +672,59 @@ class WebRTCCamera extends VideoRTC {
 
         const stream = this.querySelector('.stream');
         stream.style.display = this.config.streams.length > 1 ? 'block' : 'none';
+    }
+
+    renderAudioControl() {
+        if (!this.config.audio_control || this.config.ui) return;
+
+        // A compact audio-only control for cards that hide the browser-native
+        // media controls but still need an explicit user gesture to unmute.
+        this.video.controls = false;
+
+        const card = this.querySelector('.card');
+        card.insertAdjacentHTML('beforebegin', `
+            <style>
+                .audio-control {
+                    position: absolute;
+                    right: 8px;
+                    bottom: 8px;
+                    z-index: 3;
+                    color: white;
+                    cursor: pointer;
+                    padding: 6px;
+                    border-radius: 50%;
+                    background: rgba(0, 0, 0, 0.35);
+                    display: none;
+                }
+            </style>
+        `);
+        card.insertAdjacentHTML('beforeend',
+            '<ha-icon class="audio-control" icon="mdi:volume-high" title="Audio"></ha-icon>');
+
+        const video = this.video;
+        const control = this.querySelector('.audio-control');
+        const update = () => {
+            control.icon = video.muted ? 'mdi:volume-mute' : 'mdi:volume-high';
+            control.style.display = this.hasAudio ? 'block' : 'none';
+        };
+
+        control.addEventListener('click', ev => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (video.muted) {
+                video.muted = false;
+                // The click is a user gesture, so retry audible playback after
+                // the browser's autoplay policy may have forced muted playback.
+                video.play().catch(console.warn);
+            } else {
+                video.muted = true;
+            }
+        });
+
+        video.addEventListener('loadeddata', update);
+        video.addEventListener('playing', update);
+        video.addEventListener('volumechange', update);
+        update();
     }
 
     renderShortcuts() {

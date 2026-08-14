@@ -29,16 +29,9 @@ jobs:
           assert text.count(old) == 1, f'Expected one renderMain muted assignment, found {text.count(old)}'
           text = text.replace(old, new, 1)
 
-          old = """            } else if (icon === 'mdi:volume-mute') {
-                video.muted = false;
-            } else if (icon === 'mdi:volume-high') {"""
-          new = """            } else if (icon === 'mdi:volume-mute') {
-                // This click is an explicit user gesture, so retry audible
-                // playback after VideoRTC's autoplay fallback may have muted it.
-                video.muted = false;
-                video.play().catch(console.warn);
-            } else if (icon === 'mdi:volume-high') {"""
-          assert text.count(old) == 1, f'Expected one volume unmute handler, found {text.count(old)}'
+          old = "video.muted = false;"
+          new = "video.muted = false;\n                // Retry from the explicit user gesture after autoplay may have muted playback.\n                video.play().catch(console.warn);"
+          assert text.count(old) == 1, f'Expected one volume unmute assignment, found {text.count(old)}'
           text = text.replace(old, new, 1)
           js_path.write_text(text)
 

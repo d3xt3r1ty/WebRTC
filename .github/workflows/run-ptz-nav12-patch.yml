@@ -1,0 +1,26 @@
+name: Run nav.12 PTZ tuning patch
+
+on:
+  push:
+    branches: [feature/ptz-tuning-nav12]
+    paths:
+      - .github/workflows/run-ptz-nav12-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ptz-tuning-nav12
+      - run: python tools/patch_ptz_nav12.py
+      - run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Tune physical PTZ controls and wheel zoom"
+          git push origin feature/ptz-tuning-nav12

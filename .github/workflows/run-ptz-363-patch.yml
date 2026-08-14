@@ -1,0 +1,33 @@
+name: Run PTZ 3.6.3 patch
+
+on:
+  push:
+    branches:
+      - feature/ptz-zoom-slider-3.6.3
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/ptz-zoom-slider-3.6.3
+      - name: Apply patch
+        run: python tools/patch_ptz_363.py
+      - name: Validate JavaScript
+        run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - name: Validate manifest JSON
+        run: python -m json.tool custom_components/webrtc/manifest.json > /dev/null
+      - name: Show diff
+        run: git diff --check && git diff --stat && git diff
+      - name: Commit patched files
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Add configurable PTZ tuning and zoom slider" || exit 0
+          git push

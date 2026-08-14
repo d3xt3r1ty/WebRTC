@@ -212,7 +212,7 @@ class WebRTCCamera extends VideoRTC {
         const mode = this.querySelector('.mode');
         mode.addEventListener('click', () => this.nextStream(true));
 
-        if (this.config.muted) this.video.muted = true;
+        if (this.config.muted !== undefined) this.video.muted = this.config.muted;
         if (this.config.poster_remote) this.video.poster = this.config.poster;
     }
 
@@ -633,6 +633,8 @@ class WebRTCCamera extends VideoRTC {
                 this.play();
             } else if (icon === 'mdi:volume-mute') {
                 video.muted = false;
+                // Retry from the explicit user gesture after autoplay may have muted playback.
+                video.play().catch(console.warn);
             } else if (icon === 'mdi:volume-high') {
                 video.muted = true;
             } else if (icon === 'mdi:fullscreen') {

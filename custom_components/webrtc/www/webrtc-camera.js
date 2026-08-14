@@ -77,7 +77,7 @@ class WebRTCCamera extends VideoRTC {
         super.oninit();
         this.renderMain();
         this.renderDigitalPTZ();
-        this.renderTapAction();
+        this.renderActions();
         this.renderPTZ();
         this.renderCustomUI();
         this.renderShortcuts();
@@ -232,37 +232,100 @@ class WebRTCCamera extends VideoRTC {
         window.dispatchEvent(new CustomEvent('location-changed'));
     }
 
-    renderTapAction() {
-        const action = this.config.tap_action;
-        if (!action || action.action !== 'navigate' || !action.navigation_path) return;
+    performAction(action, source = this) {
+        if (!action || !action.action || action.action === 'none') return;
 
-        // Native media controls intercept single taps/clicks (pause, seek, mute,
-        // fullscreen). A card-level tap action owns the video surface instead.
+        const entity = action.entity || this.config.entity;
+        switch (action.action) {
+            case 'navigate':
+                this.navigate(action.navigation_path);
+                break;
+
+            case 'more-info': {
+                if (!entity) return;
+                const event = new Event('hass-more-info', {
+                    bubbles: true,
+                    cancelable: true,
+                    composed: true,
+                });
+                event.detail = {entityId: entity};
+                source.dispatchEvent(event);
+                break;
+            }
+
+            case 'toggle':
+                if (entity) this.hass.callService('homeassistant', 'toggle', {entity_id: entity});
+                break;
+
+            case 'perform-action':
+            case 'call-service': {
+                const service = action.perform_action || action.service;
+                if (!service) return;
+                const [domain, name] = service.split('.', 2);
+                if (!domain || !name) return;
+                this.hass.callService(
+                    domain,
+                    name,
+                    action.data || action.service_data || {},
+                    action.target || {}
+                );
+                break;
+            }
+
+            case 'url': {
+                const url = action.url_path || action.url;
+                if (!url) return;
+                if (action.new_tab) window.open(url, '_blank', 'noopener');
+                else window.location.href = url;
+                break;
+            }
+        }
+    }
+
+    renderActions() {
+        const tapAction = this.config.tap_action;
+        const holdAction = this.config.hold_action;
+        if (!tapAction && !holdAction) return;
+
+        // A configured card action owns the video surface. This prevents native
+        // browser media controls (pause/seek/mute/fullscreen) intercepting taps.
         this.video.controls = false;
 
         const player = this.querySelector('.player');
         const activePointers = new Set();
         const maxMove = 10;
         const doubleTapMs = 400;
+        const holdMs = 550;
         let startX = 0;
         let startY = 0;
         let moved = false;
         let multiTouch = false;
+        let held = false;
         let lastTap = 0;
-        let pendingNavigation = null;
+        let pendingTap = null;
+        let holdTimer = null;
+
+        const clearHold = () => {
+            if (holdTimer) clearTimeout(holdTimer);
+            holdTimer = null;
+        };
 
         const resetGesture = () => {
+            clearHold();
             activePointers.clear();
             moved = false;
             multiTouch = false;
+            held = false;
         };
 
         player.addEventListener('pointerdown', ev => {
             if (ev.pointerType === 'mouse' && ev.button !== 0) return;
 
-            if (pendingNavigation && ev.timeStamp - lastTap < doubleTapMs) {
-                clearTimeout(pendingNavigation);
-                pendingNavigation = null;
+            // A second tap belongs to DigitalPTZ's double-click/double-tap zoom,
+            // so cancel the pending single-tap action before it can fire.
+            if (pendingTap && ev.timeStamp - lastTap < doubleTapMs) {
+                clearTimeout(pendingTap);
+                pendingTap = null;
             }
 
             activePointers.add(ev.pointerId);
@@ -271,22 +334,46 @@ class WebRTCCamera extends VideoRTC {
                 startY = ev.clientY;
                 moved = false;
                 multiTouch = false;
+                held = false;
+
+                if (holdAction && holdAction.action !== 'none') {
+                    const pointerId = ev.pointerId;
+                    holdTimer = setTimeout(() => {
+                        holdTimer = null;
+                        if (!activePointers.has(pointerId) || moved || multiTouch) return;
+                        held = true;
+                        this.performAction(holdAction, player);
+                    }, holdMs);
+                }
             } else {
                 multiTouch = true;
+                clearHold();
             }
         }, true);
 
         player.addEventListener('pointermove', ev => {
             if (!activePointers.has(ev.pointerId)) return;
-            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > maxMove) moved = true;
+            if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > maxMove) {
+                moved = true;
+                clearHold();
+            }
         }, true);
 
         player.addEventListener('pointerup', ev => {
             if (!activePointers.has(ev.pointerId)) return;
             activePointers.delete(ev.pointerId);
+            clearHold();
 
             if (activePointers.size > 0) {
                 multiTouch = true;
+                return;
+            }
+
+            if (held) {
+                held = false;
+                moved = false;
+                multiTouch = false;
+                lastTap = 0;
                 return;
             }
 
@@ -296,23 +383,26 @@ class WebRTCCamera extends VideoRTC {
             moved = false;
             multiTouch = false;
 
-            if (!isTap) return;
+            if (!isTap || !tapAction || tapAction.action === 'none') return;
 
             if (ev.timeStamp - lastTap < doubleTapMs) {
-                if (pendingNavigation) clearTimeout(pendingNavigation);
-                pendingNavigation = null;
+                if (pendingTap) clearTimeout(pendingTap);
+                pendingTap = null;
                 lastTap = 0;
                 return;
             }
 
             lastTap = ev.timeStamp;
-            pendingNavigation = setTimeout(() => {
-                pendingNavigation = null;
-                this.navigate(action.navigation_path);
+            pendingTap = setTimeout(() => {
+                pendingTap = null;
+                this.performAction(tapAction, player);
             }, doubleTapMs);
         }, true);
 
         player.addEventListener('pointercancel', resetGesture, true);
+        player.addEventListener('contextmenu', ev => {
+            if (holdAction && holdAction.action !== 'none') ev.preventDefault();
+        });
     }
 
     renderPTZ() {
@@ -602,8 +692,8 @@ class WebRTCCamera extends VideoRTC {
             if (index === undefined) return;
             const value = this.config.shortcuts[index];
 
-            if (value.tap_action && value.tap_action.action === 'navigate') {
-                this.navigate(value.tap_action.navigation_path);
+            if (value.tap_action) {
+                this.performAction(value.tap_action, ev.target);
                 return;
             }
 

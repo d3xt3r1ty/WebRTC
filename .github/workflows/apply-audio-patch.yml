@@ -1,0 +1,59 @@
+name: Apply WebRTC audio patch
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/apply-audio-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Patch explicit unmute handling
+        shell: python
+        run: |
+          from pathlib import Path
+
+          js_path = Path('custom_components/webrtc/www/webrtc-camera.js')
+          text = js_path.read_text()
+
+          old = "        if (this.config.muted) this.video.muted = true;"
+          new = "        if (this.config.muted !== undefined) this.video.muted = this.config.muted;"
+          assert text.count(old) == 1, f'Expected one renderMain muted assignment, found {text.count(old)}'
+          text = text.replace(old, new, 1)
+
+          old = """            } else if (icon === 'mdi:volume-mute') {
+                video.muted = false;
+            } else if (icon === 'mdi:volume-high') {"""
+          new = """            } else if (icon === 'mdi:volume-mute') {
+                // This click is an explicit user gesture, so retry audible
+                // playback after VideoRTC's autoplay fallback may have muted it.
+                video.muted = false;
+                video.play().catch(console.warn);
+            } else if (icon === 'mdi:volume-high') {"""
+          assert text.count(old) == 1, f'Expected one volume unmute handler, found {text.count(old)}'
+          text = text.replace(old, new, 1)
+          js_path.write_text(text)
+
+          manifest_path = Path('custom_components/webrtc/manifest.json')
+          manifest = manifest_path.read_text()
+          old_version = '"version": "v3.6.2-nav.3"'
+          new_version = '"version": "v3.6.2-nav.4"'
+          assert manifest.count(old_version) == 1, 'Unexpected manifest version'
+          manifest_path.write_text(manifest.replace(old_version, new_version, 1))
+
+          Path('.github/workflows/apply-audio-patch.yml').unlink()
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Improve explicit WebRTC audio unmute handling"
+          git push origin master

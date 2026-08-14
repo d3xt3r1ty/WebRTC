@@ -24,3 +24,5 @@ jobs:
           git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
           git commit -m "Tune physical PTZ controls and wheel zoom"
           git push origin feature/ptz-tuning-nav12
+
+# retry after correcting patch insertion point

@@ -3,6 +3,50 @@ import {VideoRTC} from './video-rtc.js?v=1.9.9';
 import {DigitalPTZ} from './digital-ptz.js?v=3.3.0';
 
 class WebRTCCamera extends VideoRTC {
+    static keepAliveRegistry = [];
+
+    connectedCallback() {
+        if (this.keepAliveTID) {
+            clearTimeout(this.keepAliveTID);
+            this.keepAliveTID = 0;
+        }
+        WebRTCCamera.keepAliveRegistry = WebRTCCamera.keepAliveRegistry.filter(item => item.card !== this);
+        super.connectedCallback();
+    }
+
+    disconnectedCallback() {
+        const seconds = Math.max(0, Number(this.config?.keep_alive || 0));
+        if (!seconds || this.background) {
+            super.disconnectedCallback();
+            return;
+        }
+        if (this.keepAliveTID) return;
+        if (this.wsState === WebSocket.CLOSED && this.pcState === WebSocket.CLOSED) return;
+
+        const detachedAt = Date.now();
+        this.keepAliveTID = setTimeout(() => {
+            this.keepAliveTID = 0;
+            WebRTCCamera.keepAliveRegistry = WebRTCCamera.keepAliveRegistry.filter(item => item.card !== this);
+            if (!this.isConnected) this.ondisconnect();
+        }, seconds * 1000);
+
+        WebRTCCamera.keepAliveRegistry = WebRTCCamera.keepAliveRegistry.filter(item => item.card !== this);
+        WebRTCCamera.keepAliveRegistry.push({card: this, detachedAt});
+
+        const max = Math.max(0, parseInt(this.config?.keep_alive_streams_max ?? 0));
+        if (max > 0) {
+            WebRTCCamera.keepAliveRegistry.sort((a, b) => a.detachedAt - b.detachedAt);
+            while (WebRTCCamera.keepAliveRegistry.length > max) {
+                const oldest = WebRTCCamera.keepAliveRegistry.shift();
+                if (!oldest || oldest.card === this && max > 0 && WebRTCCamera.keepAliveRegistry.length < max) continue;
+                if (oldest.card.keepAliveTID) {
+                    clearTimeout(oldest.card.keepAliveTID);
+                    oldest.card.keepAliveTID = 0;
+                }
+                if (!oldest.card.isConnected) oldest.card.ondisconnect();
+            }
+        }
+    }
     /**
      * Step 1. Called by the Hass, when config changed.
      * @param {Object} config
@@ -20,6 +64,8 @@ class WebRTCCamera extends VideoRTC {
             media: this.media,
             streams: [{url: config.url, entity: config.entity}],
             poster_remote: config.poster && (config.poster.indexOf('://') > 0 || config.poster.charAt(0) === '/'),
+            keep_alive: 0,
+            keep_alive_streams_max: 0,
         }, config);
 
         this.streamID = -1;

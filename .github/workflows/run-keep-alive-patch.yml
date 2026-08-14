@@ -1,0 +1,29 @@
+name: Run stream keep-alive patch
+
+on:
+  push:
+    branches: [feature/physical-ptz-joystick]
+    paths:
+      - .github/workflows/run-keep-alive-patch.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/physical-ptz-joystick
+      - name: Apply patch
+        run: python tools/apply_keep_alive_patch.py
+      - name: Syntax check
+        run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - name: Commit update
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Add capped temporary stream keep-alive"
+          git push origin feature/physical-ptz-joystick

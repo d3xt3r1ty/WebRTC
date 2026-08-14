@@ -20,90 +20,25 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-
+          import base64
           js_path = Path('custom_components/webrtc/www/webrtc-camera.js')
           text = js_path.read_text()
-
-          old = """        this.renderPTZ();
-        this.renderCustomUI();
-        this.renderShortcuts();"""
-          new = """        this.renderPTZ();
-        this.renderCustomUI();
-        this.renderAudioControl();
-        this.renderShortcuts();"""
+          old = "        this.renderPTZ();\n        this.renderCustomUI();\n        this.renderShortcuts();"
+          new = "        this.renderPTZ();\n        this.renderCustomUI();\n        this.renderAudioControl();\n        this.renderShortcuts();"
           assert text.count(old) == 1, f'Expected one oninit insertion point, found {text.count(old)}'
           text = text.replace(old, new, 1)
-
-          marker = """    renderShortcuts() {
-        if (!this.config.shortcuts) return;
-"""
-          method = """    renderAudioControl() {
-        if (!this.config.audio_control || this.config.ui) return;
-
-        // A compact audio-only control for cards that hide the browser-native
-        // media controls but still need an explicit user gesture to unmute.
-        this.video.controls = false;
-
-        const card = this.querySelector('.card');
-        card.insertAdjacentHTML('beforebegin', `
-            <style>
-                .audio-control {
-                    position: absolute;
-                    right: 8px;
-                    bottom: 8px;
-                    z-index: 3;
-                    color: white;
-                    cursor: pointer;
-                    padding: 6px;
-                    border-radius: 50%;
-                    background: rgba(0, 0, 0, 0.35);
-                    display: none;
-                }
-            </style>
-        `);
-        card.insertAdjacentHTML('beforeend',
-            '<ha-icon class="audio-control" icon="mdi:volume-high" title="Audio"></ha-icon>');
-
-        const video = this.video;
-        const control = this.querySelector('.audio-control');
-        const update = () => {
-            control.icon = video.muted ? 'mdi:volume-mute' : 'mdi:volume-high';
-            control.style.display = this.hasAudio ? 'block' : 'none';
-        };
-
-        control.addEventListener('click', ev => {
-            ev.preventDefault();
-            ev.stopPropagation();
-            if (video.muted) {
-                video.muted = false;
-                // The click is a user gesture, so retry audible playback after
-                // the browser's autoplay policy may have forced muted playback.
-                video.play().catch(console.warn);
-            } else {
-                video.muted = true;
-            }
-        });
-
-        video.addEventListener('loadeddata', update);
-        video.addEventListener('playing', update);
-        video.addEventListener('volumechange', update);
-        update();
-    }
-
-"""
+          marker = "    renderShortcuts() {\n        if (!this.config.shortcuts) return;\n"
+          method = base64.b64decode('ICAgIHJlbmRlckF1ZGlvQ29udHJvbCgpIHsKICAgICAgICBpZiAoIXRoaXMuY29uZmlnLmF1ZGlvX2NvbnRyb2wgfHwgdGhpcy5jb25maWcudWkpIHJldHVybjsKCiAgICAgICAgLy8gQSBjb21wYWN0IGF1ZGlvLW9ubHkgY29udHJvbCBmb3IgY2FyZHMgdGhhdCBoaWRlIHRoZSBicm93c2VyLW5hdGl2ZQogICAgICAgIC8vIG1lZGlhIGNvbnRyb2xzIGJ1dCBzdGlsbCBuZWVkIGFuIGV4cGxpY2l0IHVzZXIgZ2VzdHVyZSB0byB1bm11dGUuCiAgICAgICAgdGhpcy52aWRlby5jb250cm9scyA9IGZhbHNlOwoKICAgICAgICBjb25zdCBjYXJkID0gdGhpcy5xdWVyeVNlbGVjdG9yKCcuY2FyZCcpOwogICAgICAgIGNhcmQuaW5zZXJ0QWRqYWNlbnRIVE1MKCdiZWZvcmViZWdpbicsIGAKICAgICAgICAgICAgPHN0eWxlPgogICAgICAgICAgICAgICAgLmF1ZGlvLWNvbnRyb2wgewogICAgICAgICAgICAgICAgICAgIHBvc2l0aW9uOiBhYnNvbHV0ZTsKICAgICAgICAgICAgICAgICAgICByaWdodDogOHB4OwogICAgICAgICAgICAgICAgICAgIGJvdHRvbTogOHB4OwogICAgICAgICAgICAgICAgICAgIHotaW5kZXg6IDM7CiAgICAgICAgICAgICAgICAgICAgY29sb3I6IHdoaXRlOwogICAgICAgICAgICAgICAgICAgIGN1cnNvcjogcG9pbnRlcjsKICAgICAgICAgICAgICAgICAgICBwYWRkaW5nOiA2cHg7CiAgICAgICAgICAgICAgICAgICAgYm9yZGVyLXJhZGl1czogNTAlOwogICAgICAgICAgICAgICAgICAgIGJhY2tncm91bmQ6IHJnYmEoMCwgMCwgMCwgMC4zNSk7CiAgICAgICAgICAgICAgICAgICAgZGlzcGxheTogbm9uZTsKICAgICAgICAgICAgICAgIH0KICAgICAgICAgICAgPC9zdHlsZT4KICAgICAgICBgKTsKICAgICAgICBjYXJkLmluc2VydEFkamFjZW50SFRNTCgnYmVmb3JlZW5kJywKICAgICAgICAgICAgJzxoYS1pY29uIGNsYXNzPSJhdWRpby1jb250cm9sIiBpY29uPSJtZGk6dm9sdW1lLWhpZ2giIHRpdGxlPSJBdWRpbyI+PC9oYS1pY29uPicpOwoKICAgICAgICBjb25zdCB2aWRlbyA9IHRoaXMudmlkZW87CiAgICAgICAgY29uc3QgY29udHJvbCA9IHRoaXMucXVlcnlTZWxlY3RvcignLmF1ZGlvLWNvbnRyb2wnKTsKICAgICAgICBjb25zdCB1cGRhdGUgPSAoKSA9PiB7CiAgICAgICAgICAgIGNvbnRyb2wuaWNvbiA9IHZpZGVvLm11dGVkID8gJ21kaTp2b2x1bWUtbXV0ZScgOiAnbWRpOnZvbHVtZS1oaWdoJzsKICAgICAgICAgICAgY29udHJvbC5zdHlsZS5kaXNwbGF5ID0gdGhpcy5oYXNBdWRpbyA/ICdibG9jaycgOiAnbm9uZSc7CiAgICAgICAgfTsKCiAgICAgICAgY29udHJvbC5hZGRFdmVudExpc3RlbmVyKCdjbGljaycsIGV2ID0+IHsKICAgICAgICAgICAgZXYucHJldmVudERlZmF1bHQoKTsKICAgICAgICAgICAgZXYuc3RvcFByb3BhZ2F0aW9uKCk7CiAgICAgICAgICAgIGlmICh2aWRlby5tdXRlZCkgewogICAgICAgICAgICAgICAgdmlkZW8ubXV0ZWQgPSBmYWxzZTsKICAgICAgICAgICAgICAgIC8vIFRoZSBjbGljayBpcyBhIHVzZXIgZ2VzdHVyZSwgc28gcmV0cnkgYXVkaWJsZSBwbGF5YmFjayBhZnRlcgogICAgICAgICAgICAgICAgLy8gdGhlIGJyb3dzZXIncyBhdXRvcGxheSBwb2xpY3kgbWF5IGhhdmUgZm9yY2VkIG11dGVkIHBsYXliYWNrLgogICAgICAgICAgICAgICAgdmlkZW8ucGxheSgpLmNhdGNoKGNvbnNvbGUud2Fybik7CiAgICAgICAgICAgIH0gZWxzZSB7CiAgICAgICAgICAgICAgICB2aWRlby5tdXRlZCA9IHRydWU7CiAgICAgICAgICAgIH0KICAgICAgICB9KTsKCiAgICAgICAgdmlkZW8uYWRkRXZlbnRMaXN0ZW5lcignbG9hZGVkZGF0YScsIHVwZGF0ZSk7CiAgICAgICAgdmlkZW8uYWRkRXZlbnRMaXN0ZW5lcigncGxheWluZycsIHVwZGF0ZSk7CiAgICAgICAgdmlkZW8uYWRkRXZlbnRMaXN0ZW5lcigndm9sdW1lY2hhbmdlJywgdXBkYXRlKTsKICAgICAgICB1cGRhdGUoKTsKICAgIH0KCg==').decode()
           assert text.count(marker) == 1, f'Expected one renderShortcuts marker, found {text.count(marker)}'
           text = text.replace(marker, method + marker, 1)
           js_path.write_text(text)
-
           manifest_path = Path('custom_components/webrtc/manifest.json')
           manifest = manifest_path.read_text()
           old_version = '"version": "v3.6.2-nav.4"'
           new_version = '"version": "v3.6.2-nav.5"'
           assert manifest.count(old_version) == 1, 'Unexpected manifest version'
           manifest_path.write_text(manifest.replace(old_version, new_version, 1))
-
           Path('.github/workflows/apply-audio-control.yml').unlink()
-
       - name: Commit patch
         run: |
           git config user.name "github-actions[bot]"

@@ -815,7 +815,26 @@ class WebRTCCamera extends VideoRTC {
                 }
 
                 const direction = ev.deltaY < 0 ? 'zoom_in' : 'zoom_out';
-                if (wheelUsesJoystick) {
+                if (showZoomSlider) {
+                    const state = this.hass?.states?.[zoomEntity];
+                    const current = Number(state?.state);
+                    const min = Number(state?.attributes?.min ?? 0);
+                    const max = Number(state?.attributes?.max ?? 100);
+                    const configuredStep = Number(this.config.ptz.wheel_zoom_step ?? 3);
+                    const entityStep = Number(state?.attributes?.step ?? 1);
+                    const step = Math.max(
+                        Number.isFinite(entityStep) && entityStep > 0 ? entityStep : 1,
+                        Number.isFinite(configuredStep) && configuredStep > 0 ? configuredStep : 3
+                    );
+                    if (Number.isFinite(current)) {
+                        const target = Math.max(
+                            Number.isFinite(min) ? min : 0,
+                            Math.min(Number.isFinite(max) ? max : 100, current + (direction === 'zoom_in' ? step : -step))
+                        );
+                        this.hass.callService('number', 'set_value', {entity_id: zoomEntity, value: target})
+                            .catch(err => console.error('WebRTC PTZ wheel zoom service call failed', err));
+                    }
+                } else if (wheelUsesJoystick) {
                     const zoom = direction === 'zoom_in' ? wheelZoomSpeed : -wheelZoomSpeed;
                     handle('joystick', {pan:0, tilt:0, zoom, speed:wheelZoomSpeed});
                     wheelDirection = direction;

@@ -1,0 +1,113 @@
+name: Apply standalone audio control
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - .github/workflows/apply-audio-control.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+      - name: Add standalone audio control
+        shell: python
+        run: |
+          from pathlib import Path
+
+          js_path = Path('custom_components/webrtc/www/webrtc-camera.js')
+          text = js_path.read_text()
+
+          old = """        this.renderPTZ();
+        this.renderCustomUI();
+        this.renderShortcuts();"""
+          new = """        this.renderPTZ();
+        this.renderCustomUI();
+        this.renderAudioControl();
+        this.renderShortcuts();"""
+          assert text.count(old) == 1, f'Expected one oninit insertion point, found {text.count(old)}'
+          text = text.replace(old, new, 1)
+
+          marker = """    renderShortcuts() {
+        if (!this.config.shortcuts) return;
+"""
+          method = """    renderAudioControl() {
+        if (!this.config.audio_control || this.config.ui) return;
+
+        // A compact audio-only control for cards that hide the browser-native
+        // media controls but still need an explicit user gesture to unmute.
+        this.video.controls = false;
+
+        const card = this.querySelector('.card');
+        card.insertAdjacentHTML('beforebegin', `
+            <style>
+                .audio-control {
+                    position: absolute;
+                    right: 8px;
+                    bottom: 8px;
+                    z-index: 3;
+                    color: white;
+                    cursor: pointer;
+                    padding: 6px;
+                    border-radius: 50%;
+                    background: rgba(0, 0, 0, 0.35);
+                    display: none;
+                }
+            </style>
+        `);
+        card.insertAdjacentHTML('beforeend',
+            '<ha-icon class="audio-control" icon="mdi:volume-high" title="Audio"></ha-icon>');
+
+        const video = this.video;
+        const control = this.querySelector('.audio-control');
+        const update = () => {
+            control.icon = video.muted ? 'mdi:volume-mute' : 'mdi:volume-high';
+            control.style.display = this.hasAudio ? 'block' : 'none';
+        };
+
+        control.addEventListener('click', ev => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            if (video.muted) {
+                video.muted = false;
+                // The click is a user gesture, so retry audible playback after
+                // the browser's autoplay policy may have forced muted playback.
+                video.play().catch(console.warn);
+            } else {
+                video.muted = true;
+            }
+        });
+
+        video.addEventListener('loadeddata', update);
+        video.addEventListener('playing', update);
+        video.addEventListener('volumechange', update);
+        update();
+    }
+
+"""
+          assert text.count(marker) == 1, f'Expected one renderShortcuts marker, found {text.count(marker)}'
+          text = text.replace(marker, method + marker, 1)
+          js_path.write_text(text)
+
+          manifest_path = Path('custom_components/webrtc/manifest.json')
+          manifest = manifest_path.read_text()
+          old_version = '"version": "v3.6.2-nav.4"'
+          new_version = '"version": "v3.6.2-nav.5"'
+          assert manifest.count(old_version) == 1, 'Unexpected manifest version'
+          manifest_path.write_text(manifest.replace(old_version, new_version, 1))
+
+          Path('.github/workflows/apply-audio-control.yml').unlink()
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Add standalone WebRTC audio control"
+          git push origin master

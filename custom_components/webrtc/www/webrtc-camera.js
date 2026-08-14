@@ -304,11 +304,18 @@ class WebRTCCamera extends VideoRTC {
     renderDigitalPTZ() {
         if (this.config.digital_ptz === false) return;
         const media = this.imageMode ? this.staticImage : this.video;
+        const digitalOptions = Object.assign({}, this.config.digital_ptz, {persist_key: this.config.image || this.config.url});
+        const hasPhysicalWheelZoom = Boolean(
+            this.config.ptz?.service &&
+            this.config.ptz?.data_start_zoom_in && this.config.ptz?.data_end_zoom_in &&
+            this.config.ptz?.data_start_zoom_out && this.config.ptz?.data_end_zoom_out
+        );
+        if (hasPhysicalWheelZoom) digitalOptions.mouse_wheel_zoom = false;
         this.digitalPTZ = new DigitalPTZ(
             this.querySelector('.player'),
             this.querySelector('.player .ptz-transform'),
             media,
-            Object.assign({}, this.config.digital_ptz, {persist_key: this.config.image || this.config.url})
+            digitalOptions
         );
     }
 
@@ -370,7 +377,10 @@ class WebRTCCamera extends VideoRTC {
 
     renderActions() {
         const tapAction = this.config.tap_action;
-        const holdAction = this.config.hold_action;
+        const physicalDragOwnsSurface = Boolean(
+            this.config.ptz?.joystick && this.config.ptz?.physical_drag !== false
+        );
+        const holdAction = physicalDragOwnsSurface ? null : this.config.hold_action;
         if (!tapAction && !holdAction) return;
 
         // A configured card action owns the video surface. This prevents native
@@ -560,7 +570,7 @@ class WebRTCCamera extends VideoRTC {
             'bottom-right': `bottom:${offsetY}px;right:${offsetX}px;`,
         };
         const anchorCSS = anchors[position] || anchors['center-right'];
-        const fixedRadius = Math.max(40, Number(this.config.ptz.joystick_radius || 60));
+        const fixedRadius = Math.max(40, Number(this.config.ptz.joystick_radius || 115));
         const fixedDiameter = fixedRadius * 2;
 
         card.insertAdjacentHTML('beforebegin', `
@@ -600,7 +610,7 @@ class WebRTCCamera extends VideoRTC {
             const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);
             const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);
             const minSpeed = Math.max(0, Math.min(1, parseFloat(this.config.ptz.joystick_min_speed) || 0.12));
-            const curve = Math.max(0.2, parseFloat(this.config.ptz.joystick_curve) || 1.35);
+            const curve = Math.max(0.2, parseFloat(this.config.ptz.joystick_curve) || 1.9);
 
             const hideDynamic = () => { if (dynamicJoystick) dynamicMove.style.display = 'none'; };
             const stopMove = () => {
@@ -625,8 +635,8 @@ class WebRTCCamera extends VideoRTC {
                 if (dynamicJoystick && isDigitallyZoomed()) return;
                 activePointer = ev.pointerId;
                 originX = ev.clientX; originY = ev.clientY;
-                radius = Math.max(40, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_radius_touch || 90) : (this.config.ptz.joystick_radius || 60)));
-                deadbandPx = Math.max(4, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_deadband_touch || 24) : (this.config.ptz.joystick_deadband || 14)));
+                radius = Math.max(40, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_radius_touch || 150) : (this.config.ptz.joystick_radius || 115)));
+                deadbandPx = Math.max(4, Number(ev.pointerType === 'touch' ? (this.config.ptz.joystick_deadband_touch || 34) : (this.config.ptz.joystick_deadband || 22)));
                 if (dynamicJoystick) {
                     const rect = player.getBoundingClientRect();
                     dynamicMove.style.width = `${radius*2}px`; dynamicMove.style.height = `${radius*2}px`;
@@ -673,9 +683,10 @@ class WebRTCCamera extends VideoRTC {
                 if (!player.hasAttribute('tabindex')) player.tabIndex = 0;
                 const held = new Set();
                 let keyTimer = null, keyStarted = 0, keyLastSend = 0, keyPan = 0, keyTilt = 0;
-                const initial = Math.max(0.01, Math.min(1, Number(this.config.ptz.keyboard_initial_speed || 0.12)));
-                const maximum = Math.max(initial, Math.min(1, Number(this.config.ptz.keyboard_max_speed || 0.65)));
-                const rampMs = Math.max(0, Number(this.config.ptz.keyboard_ramp_ms || 1500));
+                const initial = Math.max(0.01, Math.min(1, Number(this.config.ptz.keyboard_initial_speed || 0.05)));
+                const maximum = Math.max(initial, Math.min(1, Number(this.config.ptz.keyboard_max_speed || 0.45)));
+                const rampMs = Math.max(0, Number(this.config.ptz.keyboard_ramp_ms || 2500));
+                const keyboardUpdateMs = Math.max(150, Number(this.config.ptz.keyboard_update_ms || 300));
                 const tick = force => {
                     let x=(held.has('ArrowRight')?1:0)-(held.has('ArrowLeft')?1:0);
                     let y=(held.has('ArrowUp')?1:0)-(held.has('ArrowDown')?1:0);
@@ -691,8 +702,11 @@ class WebRTCCamera extends VideoRTC {
                 player.addEventListener('keydown', ev => {
                     if (ev.key === 'Escape') { held.clear(); tick(true); if(keyTimer)clearInterval(keyTimer); keyTimer=null; player.blur(); ev.preventDefault(); return; }
                     if (!['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(ev.key)) return;
-                    if (!held.size) keyStarted=performance.now(); held.add(ev.key); tick(true);
-                    if (!keyTimer) keyTimer=setInterval(()=>tick(false),100);
+                    if (ev.repeat) { ev.preventDefault(); ev.stopPropagation(); return; }
+                    if (!held.size) keyStarted=performance.now();
+                    held.add(ev.key);
+                    tick(true);
+                    if (!keyTimer) keyTimer=setInterval(()=>tick(false), keyboardUpdateMs);
                     ev.preventDefault(); ev.stopPropagation();
                 });
                 player.addEventListener('keyup', ev => {
@@ -702,6 +716,50 @@ class WebRTCCamera extends VideoRTC {
                 });
                 player.addEventListener('blur', () => { if (held.size) { held.clear(); tick(true); } if(keyTimer)clearInterval(keyTimer); keyTimer=null; });
             }
+        }
+
+        // Desktop wheel arbitration: physical optical zoom while unzoomed;
+        // Ctrl+wheel enters DigitalPTZ, and once digitally zoomed the wheel
+        // remains digital regardless of whether Ctrl stays pressed. Pinch remains
+        // handled by DigitalPTZ and is always digital.
+        const hasPhysicalWheelZoom = Boolean(
+            this.config.ptz.data_start_zoom_in && this.config.ptz.data_end_zoom_in &&
+            this.config.ptz.data_start_zoom_out && this.config.ptz.data_end_zoom_out
+        );
+        if (hasPhysicalWheelZoom && this.digitalPTZ) {
+            let wheelStopTimer = null;
+            let wheelDirection = null;
+            const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms || 180));
+            player.addEventListener('wheel', ev => {
+                const digitallyZoomed = isDigitallyZoomed();
+                if (digitallyZoomed || ev.ctrlKey) {
+                    const zoom = 1 - ev.deltaY / 1000;
+                    this.digitalPTZ.transform.zoomAtCoords(zoom, ev.pageX, ev.pageY);
+                    this.digitalPTZ.render();
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    return;
+                }
+
+                const direction = ev.deltaY < 0 ? 'zoom_in' : 'zoom_out';
+                if (wheelStopTimer && wheelDirection !== direction) {
+                    clearTimeout(wheelStopTimer);
+                    handle('end_' + wheelDirection);
+                    wheelStopTimer = null;
+                }
+                if (!wheelStopTimer || wheelDirection !== direction) {
+                    handle('start_' + direction);
+                }
+                wheelDirection = direction;
+                if (wheelStopTimer) clearTimeout(wheelStopTimer);
+                wheelStopTimer = setTimeout(() => {
+                    handle('end_' + wheelDirection);
+                    wheelStopTimer = null;
+                    wheelDirection = null;
+                }, pulseMs);
+                ev.preventDefault();
+                ev.stopPropagation();
+            }, {passive:false});
         }
 
         for (const [startEvent, endEvent] of [['touchstart','touchend'],['mousedown','mouseup']]) {

@@ -51,16 +51,21 @@ export class DigitalPTZ {
     if (o.touch_tap_drag_zoom) h.push(startTouchTapDragZoom(gestureParam));
     if (o.touch_drag_pan) h.push(startTouchDragPan(gestureParam));
     if (o.touch_pinch_zoom) h.push(startTouchPinchZoom(gestureParam));
-    this.videoEl.addEventListener("loadedmetadata", this.recomputeRects);
-    this.videoEl.addEventListener("load", this.recomputeRects);
+    this.mediaReadyHandler = () => requestAnimationFrame(this.recomputeRects);
+    this.videoEl.addEventListener("loadedmetadata", this.mediaReadyHandler);
+    this.videoEl.addEventListener("load", this.mediaReadyHandler);
     this.resizeObserver = new ResizeObserver(this.recomputeRects);
     this.resizeObserver.observe(this.containerEl);
     this.recomputeRects();
+    if ((this.videoEl.tagName === "IMG" && this.videoEl.complete && this.videoEl.naturalWidth) ||
+        (this.videoEl.tagName === "VIDEO" && this.videoEl.readyState >= 1)) {
+      this.mediaReadyHandler();
+    }
   }
   destroy() {
     for (const off of this.offHandles) off();
-    this.videoEl.removeEventListener("loadedmetadata", this.recomputeRects);
-    this.videoEl.removeEventListener("load", this.recomputeRects);
+    this.videoEl.removeEventListener("loadedmetadata", this.mediaReadyHandler);
+    this.videoEl.removeEventListener("load", this.mediaReadyHandler);
     this.resizeObserver.unobserve(this.containerEl);
   }
 }

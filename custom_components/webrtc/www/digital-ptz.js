@@ -52,6 +52,7 @@ export class DigitalPTZ {
     if (o.touch_drag_pan) h.push(startTouchDragPan(gestureParam));
     if (o.touch_pinch_zoom) h.push(startTouchPinchZoom(gestureParam));
     this.videoEl.addEventListener("loadedmetadata", this.recomputeRects);
+    this.videoEl.addEventListener("load", this.recomputeRects);
     this.resizeObserver = new ResizeObserver(this.recomputeRects);
     this.resizeObserver.observe(this.containerEl);
     this.recomputeRects();
@@ -59,6 +60,7 @@ export class DigitalPTZ {
   destroy() {
     for (const off of this.offHandles) off();
     this.videoEl.removeEventListener("loadedmetadata", this.recomputeRects);
+    this.videoEl.removeEventListener("load", this.recomputeRects);
     this.resizeObserver.unobserve(this.containerEl);
   }
 }
@@ -208,11 +210,12 @@ function startMouseDragPan(params) {
 const PERSIST_KEY_PREFIX = "webrtc-digital-ptc:";
 const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 function getTransformedDimensions(video) {
-  const { videoWidth, videoHeight } = video;
+  const videoWidth = video.videoWidth || video.naturalWidth || 0;
+  const videoHeight = video.videoHeight || video.naturalHeight || 0;
   if (!videoHeight || !videoWidth) return undefined;
   var transform = window.getComputedStyle(video).getPropertyValue("transform");
   const match = transform.match(/matrix\((.+)\)/);
-  if (!match || !match[1]) return { videoWidth, videoHeight }; // the video isn't transformed
+  if (!match || !match[1]) return { videoWidth, videoHeight }; // media isn't transformed
   const matrix = new DOMMatrix(match[1].split(", ").map(Number));
   const points = [
     new DOMPoint(0, 0),

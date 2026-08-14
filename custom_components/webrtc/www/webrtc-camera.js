@@ -52,7 +52,8 @@ class WebRTCCamera extends VideoRTC {
      * @param {Object} config
      */
     setConfig(config) {
-        if (!config.url && !config.entity && !config.streams) throw new Error('Missing `url` or `entity` or `streams`');
+        if (!config.url && !config.entity && !config.streams && !config.image) throw new Error('Missing `url`, `entity`, `streams` or `image`');
+        this.imageMode = Boolean(config.image);
 
         if (config.background) this.background = config.background;
 
@@ -69,18 +70,29 @@ class WebRTCCamera extends VideoRTC {
         }, config);
 
         this.streamID = -1;
-        this.nextStream(false);
+        if (!this.imageMode) this.nextStream(false);
 
         this.onhass = [];
     }
 
     set hass(hass) {
         this._hass = hass;
+        if (this.imageMode) this.updateStaticImage();
         this.onhass.forEach(fn => fn());
     }
 
     get hass() {
         return this._hass;
+    }
+
+    updateStaticImage() {
+        if (!this.imageMode || !this.staticImage || !this.hass) return;
+        let source = String(this.config.image || '').trim();
+        const state = this.hass.states?.[source];
+        if (state?.attributes?.entity_picture) source = state.attributes.entity_picture;
+        if (!source) return;
+        if (!/^https?:\/\//i.test(source)) source = this.hass.hassUrl(source);
+        if (this.staticImage.src !== source) this.staticImage.src = source;
     }
 
     getCardSize() {
@@ -101,6 +113,7 @@ class WebRTCCamera extends VideoRTC {
 
     /** @param reload {boolean} */
     nextStream(reload) {
+        if (this.imageMode) return;
         this.streamID = (this.streamID + 1) % this.config.streams.length;
 
         const stream = this.config.streams[this.streamID];
@@ -133,6 +146,11 @@ class WebRTCCamera extends VideoRTC {
 
     onconnect() {
         if (!this.config || !this.hass) return false;
+        if (this.imageMode) {
+            this.updateStaticImage();
+            this.setStatus('IMG', this.config.title || '');
+            return false;
+        }
         if (!this.isConnected || this.ws || this.pc) return false;
 
         const divMode = this.querySelector('.mode').innerText;
@@ -226,6 +244,15 @@ class WebRTCCamera extends VideoRTC {
             .player .ptz-transform {
                 height: 100%;
             }
+            .static-image {
+                width: 100%;
+                height: 100%;
+                display: block;
+                object-fit: contain;
+                transform-origin: center center;
+                user-select: none;
+                -webkit-user-drag: none;
+            }
             .header {
                 position: absolute;
                 top: 6px;
@@ -254,22 +281,34 @@ class WebRTCCamera extends VideoRTC {
         `;
 
         this.querySelector = selectors => this.shadowRoot.querySelector(selectors);
-        this.querySelector('.ptz-transform').appendChild(this.video);
+        if (this.imageMode) {
+            this.staticImage = document.createElement('img');
+            this.staticImage.className = 'static-image';
+            this.staticImage.alt = this.config.title || 'Camera snapshot';
+            this.staticImage.draggable = false;
+            this.querySelector('.ptz-transform').appendChild(this.staticImage);
+            this.updateStaticImage();
+        } else {
+            this.querySelector('.ptz-transform').appendChild(this.video);
+        }
 
         const mode = this.querySelector('.mode');
         mode.addEventListener('click', () => this.nextStream(true));
 
-        if (this.config.muted !== undefined) this.video.muted = this.config.muted;
-        if (this.config.poster_remote) this.video.poster = this.config.poster;
+        if (!this.imageMode) {
+            if (this.config.muted !== undefined) this.video.muted = this.config.muted;
+            if (this.config.poster_remote) this.video.poster = this.config.poster;
+        }
     }
 
     renderDigitalPTZ() {
         if (this.config.digital_ptz === false) return;
+        const media = this.imageMode ? this.staticImage : this.video;
         new DigitalPTZ(
             this.querySelector('.player'),
             this.querySelector('.player .ptz-transform'),
-            this.video,
-            Object.assign({}, this.config.digital_ptz, {persist_key: this.config.url})
+            media,
+            Object.assign({}, this.config.digital_ptz, {persist_key: this.config.image || this.config.url})
         );
     }
 
@@ -336,7 +375,7 @@ class WebRTCCamera extends VideoRTC {
 
         // A configured card action owns the video surface. This prevents native
         // browser media controls (pause/seek/mute/fullscreen) intercepting taps.
-        this.video.controls = false;
+        if (!this.imageMode) this.video.controls = false;
 
         const player = this.querySelector('.player');
         const activePointers = new Set();
@@ -584,17 +623,34 @@ class WebRTCCamera extends VideoRTC {
             </div>
         `);
 
-        const template = JSON.stringify(this.config.ptz);
         const handle = (path, vars = {}) => {
-            if (!this.config.ptz['data_' + path]) return;
+            const dataTemplate = this.config.ptz['data_' + path];
+            if (!dataTemplate) return;
             const pan = Number(vars.pan || 0);
             const tilt = Number(vars.tilt || 0);
             const zoom = Number(vars.zoom || 0);
             const speed = Number(vars.speed || Math.hypot(pan, tilt));
-            const config = template.indexOf('${') < 0 ? this.config.ptz : JSON.parse(eval('`' + template + '`'));
-            const [domain, service] = config.service.split('.', 2);
-            const data = config['data_' + path];
-            this.hass.callService(domain, service, data);
+            const substitute = value => {
+                if (typeof value === 'string') return value
+                    .replaceAll('${pan}', String(pan))
+                    .replaceAll('${tilt}', String(tilt))
+                    .replaceAll('${zoom}', String(zoom))
+                    .replaceAll('${speed}', String(speed));
+                if (Array.isArray(value)) return value.map(substitute);
+                if (value && typeof value === 'object') return Object.fromEntries(
+                    Object.entries(value).map(([key, item]) => [key, substitute(item)])
+                );
+                return value;
+            };
+            const [domain, service] = String(this.config.ptz.service).split('.', 2);
+            if (!domain || !service) {
+                console.error('WebRTC PTZ: invalid service', this.config.ptz.service);
+                return;
+            }
+            const data = substitute(dataTemplate);
+            this.hass.callService(domain, service, data).catch(err =>
+                console.error(`WebRTC PTZ ${path} service call failed`, err, data)
+            );
         };
 
         const ptz = this.querySelector('.ptz');
@@ -611,17 +667,31 @@ class WebRTCCamera extends VideoRTC {
             let lastSend = 0;
             let lastPan = 0;
             let lastTilt = 0;
+            let lastSpeed = 0;
+            let heartbeat = null;
 
             const resetStick = () => {
                 stick.style.transform = 'translate(0px, 0px)';
             };
 
             const stopMove = () => {
+                if (heartbeat) clearInterval(heartbeat);
+                heartbeat = null;
                 if (moving) handle('joystick_stop');
                 moving = false;
                 lastPan = 0;
                 lastTilt = 0;
+                lastSpeed = 0;
                 resetStick();
+            };
+
+            const startHeartbeat = () => {
+                if (heartbeat) return;
+                heartbeat = setInterval(() => {
+                    if (activePointer === null || !moving) return;
+                    handle('joystick', {pan: lastPan, tilt: lastTilt, zoom: 0, speed: lastSpeed});
+                    lastSend = performance.now();
+                }, updateMs);
             };
 
             const updateJoystick = (ev, force = false) => {
@@ -642,6 +712,9 @@ class WebRTCCamera extends VideoRTC {
                         moving = false;
                         lastPan = 0;
                         lastTilt = 0;
+                        lastSpeed = 0;
+                        if (heartbeat) clearInterval(heartbeat);
+                        heartbeat = null;
                     }
                     return;
                 }
@@ -657,7 +730,9 @@ class WebRTCCamera extends VideoRTC {
                     lastSend = now;
                     lastPan = pan;
                     lastTilt = tilt;
+                    lastSpeed = magnitude;
                     moving = true;
+                    startHeartbeat();
                 }
             };
 

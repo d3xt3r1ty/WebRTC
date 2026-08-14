@@ -570,8 +570,11 @@ class WebRTCCamera extends VideoRTC {
             'bottom-right': `bottom:${offsetY}px;right:${offsetX}px;`,
         };
         const anchorCSS = anchors[position] || anchors['center-right'];
-        const fixedRadius = Math.max(40, Number(this.config.ptz.joystick_radius || 115));
+        const fixedRadius = Math.max(40, Number(this.config.ptz.joystick_radius ?? 115));
         const fixedDiameter = fixedRadius * 2;
+        const zoomEntity = String(this.config.ptz.zoom_entity || '').trim();
+        const showZoomSlider = Boolean(zoomEntity && this.config.ptz.zoom_slider !== false);
+        const zoomSliderOrientation = String(this.config.ptz.zoom_slider_orientation || 'vertical').toLowerCase();
 
         card.insertAdjacentHTML('beforebegin', `
             <style>
@@ -586,6 +589,13 @@ class WebRTCCamera extends VideoRTC {
                 .ptz-deadband { position:absolute; left:50%; top:50%; border:1px dashed rgba(255,255,255,.32); border-radius:50%; transform:translate(-50%,-50%); pointer-events:none; }
                 .ptz-zoom { position:relative; width:80px; height:40px; background:rgba(0,0,0,.3); border-radius:4px; display:${hasZoom ? 'block' : 'none'}; }
                 .ptz-home { position:relative; width:40px; height:40px; background:rgba(0,0,0,.3); border-radius:4px; align-self:center; display:${hasHome ? 'block' : 'none'}; }
+                .ptz-zoom-slider { display:${showZoomSlider ? 'flex' : 'none'}; align-items:center; justify-content:center; gap:6px; padding:7px 6px; border-radius:6px; background:rgba(0,0,0,.3); color:white; font-size:12px; }
+                .ptz-zoom-slider.vertical { flex-direction:column; min-height:150px; }
+                .ptz-zoom-slider.horizontal { flex-direction:row; min-width:170px; }
+                .ptz-zoom-slider input { accent-color:var(--primary-color); cursor:pointer; }
+                .ptz-zoom-slider.vertical input { width:120px; transform:rotate(-90deg); margin:48px -42px; }
+                .ptz-zoom-slider.horizontal input { width:120px; }
+                .ptz-zoom-value { min-width:34px; text-align:center; font-variant-numeric:tabular-nums; }
                 .up { position:absolute; top:5px; left:50%; transform:translateX(-50%); }.down { position:absolute; bottom:5px; left:50%; transform:translateX(-50%); }.left { position:absolute; left:5px; top:50%; transform:translateY(-50%); }.right { position:absolute; right:5px; top:50%; transform:translateY(-50%); }
                 .zoom_out { position:absolute; left:5px; top:50%; transform:translateY(-50%); }.zoom_in { position:absolute; right:5px; top:50%; transform:translateY(-50%); }.home { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); }
             </style>`);
@@ -593,6 +603,11 @@ class WebRTCCamera extends VideoRTC {
             <div class="ptz">
                 <div class="ptz-move ${joystickEnabled ? 'joystick' : ''}">${joystickEnabled ? '<div class="ptz-centre"></div><div class="ptz-stick"></div>' : '<ha-icon class="right" icon="mdi:arrow-right"></ha-icon><ha-icon class="left" icon="mdi:arrow-left"></ha-icon><ha-icon class="up" icon="mdi:arrow-up"></ha-icon><ha-icon class="down" icon="mdi:arrow-down"></ha-icon>'}</div>
                 <div class="ptz-zoom"><ha-icon class="zoom_in" icon="mdi:plus"></ha-icon><ha-icon class="zoom_out" icon="mdi:minus"></ha-icon></div>
+                <div class="ptz-zoom-slider ${zoomSliderOrientation === 'horizontal' ? 'horizontal' : 'vertical'}">
+                    <ha-icon icon="mdi:magnify"></ha-icon>
+                    <input class="ptz-zoom-range" type="range" min="0" max="100" step="1" value="0">
+                    <span class="ptz-zoom-value">0%</span>
+                </div>
                 <div class="ptz-home"><ha-icon class="home" icon="mdi:home"></ha-icon></div>
             </div>
             <div class="ptz-dynamic"><div class="ptz-deadband"></div><div class="ptz-centre"></div><div class="ptz-stick"></div></div>`);
@@ -602,6 +617,51 @@ class WebRTCCamera extends VideoRTC {
         const dynamicMove = this.querySelector('.ptz-dynamic');
         const isDigitallyZoomed = () => Boolean(this.digitalPTZ && this.digitalPTZ.transform && this.digitalPTZ.transform.scale > 1.001);
 
+        if (showZoomSlider) {
+            const range = this.querySelector('.ptz-zoom-range');
+            const label = this.querySelector('.ptz-zoom-value');
+            let sliderActive = false;
+            let lastSent = null;
+            const updateZoomSlider = () => {
+                const state = this.hass?.states?.[zoomEntity];
+                if (!state) return;
+                const value = Number(state.state);
+                if (!Number.isFinite(value)) return;
+                const min = Number(state.attributes?.min ?? 0);
+                const max = Number(state.attributes?.max ?? 100);
+                const step = Number(state.attributes?.step ?? 1);
+                range.min = String(Number.isFinite(min) ? min : 0);
+                range.max = String(Number.isFinite(max) ? max : 100);
+                range.step = String(Number.isFinite(step) && step > 0 ? step : 1);
+                if (!sliderActive) range.value = String(value);
+                label.textContent = `${Math.round(value)}%`;
+            };
+            this.onhass.push(updateZoomSlider);
+            updateZoomSlider();
+            const sendZoom = value => {
+                const numeric = Number(value);
+                if (!Number.isFinite(numeric) || numeric === lastSent) return;
+                lastSent = numeric;
+                this.hass.callService('number', 'set_value', {entity_id: zoomEntity, value: numeric})
+                    .catch(err => console.error('WebRTC PTZ zoom slider service call failed', err));
+            };
+            range.addEventListener('pointerdown', ev => { sliderActive = true; ev.stopPropagation(); });
+            range.addEventListener('input', ev => {
+                const value = Number(ev.target.value);
+                label.textContent = `${Math.round(value)}%`;
+            });
+            range.addEventListener('change', ev => sendZoom(ev.target.value));
+            const finishSlider = ev => {
+                if (!sliderActive) return;
+                sliderActive = false;
+                sendZoom(range.value);
+                ev?.stopPropagation?.();
+            };
+            range.addEventListener('pointerup', finishSlider);
+            range.addEventListener('pointercancel', finishSlider);
+            range.addEventListener('click', ev => ev.stopPropagation());
+        }
+
         if (joystickEnabled) {
             const surface = dynamicJoystick ? player : fixedMove;
             let activePointer = null, originX = 0, originY = 0, moving = false;
@@ -609,8 +669,11 @@ class WebRTCCamera extends VideoRTC {
             let radius = fixedRadius, deadbandPx = 14;
             const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);
             const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);
-            const minSpeed = Math.max(0, Math.min(1, parseFloat(this.config.ptz.joystick_min_speed) || 0.12));
-            const curve = Math.max(0.2, parseFloat(this.config.ptz.joystick_curve) || 1.9);
+            const configuredMinSpeed = Number(this.config.ptz.joystick_min_speed ?? 0.03);
+            const configuredMaxSpeed = Number(this.config.ptz.joystick_max_speed ?? 1.0);
+            const minSpeed = Math.max(0, Math.min(1, Number.isFinite(configuredMinSpeed) ? configuredMinSpeed : 0.03));
+            const maxSpeed = Math.max(minSpeed, Math.min(1, Number.isFinite(configuredMaxSpeed) ? configuredMaxSpeed : 1.0));
+            const curve = Math.max(0.2, Number(this.config.ptz.joystick_curve ?? 1.9));
 
             const hideDynamic = () => { if (dynamicJoystick) dynamicMove.style.display = 'none'; };
             const stopMove = () => {
@@ -660,7 +723,7 @@ class WebRTCCamera extends VideoRTC {
                     ev.preventDefault(); ev.stopPropagation(); return;
                 }
                 const norm = Math.min(1, (dist-deadbandPx)/Math.max(1,radius-deadbandPx));
-                const magnitude = minSpeed + (1-minSpeed)*Math.pow(norm,curve);
+                const magnitude = minSpeed + (maxSpeed-minSpeed)*Math.pow(norm,curve);
                 const pan = dx/dist*magnitude, tilt = -dy/dist*magnitude;
                 const now=performance.now(), changed=Math.hypot(pan-lastPan,tilt-lastTilt)>=0.03;
                 if (!moving || (changed && now-lastSend>=updateMs)) {
@@ -683,7 +746,7 @@ class WebRTCCamera extends VideoRTC {
                 if (!player.hasAttribute('tabindex')) player.tabIndex = 0;
                 const held = new Set();
                 let keyTimer = null, keyStarted = 0, keyLastSend = 0, keyPan = 0, keyTilt = 0;
-                const initial = Math.max(0.01, Math.min(1, Number(this.config.ptz.keyboard_initial_speed || 0.05)));
+                const initial = Math.max(0, Math.min(1, Number(this.config.ptz.keyboard_initial_speed ?? 0.04)));
                 const maximum = Math.max(initial, Math.min(1, Number(this.config.ptz.keyboard_max_speed || 0.45)));
                 const rampMs = Math.max(0, Number(this.config.ptz.keyboard_ramp_ms || 2500));
                 const keyboardUpdateMs = Math.max(150, Number(this.config.ptz.keyboard_update_ms || 300));
@@ -729,7 +792,9 @@ class WebRTCCamera extends VideoRTC {
         if (hasPhysicalWheelZoom && this.digitalPTZ) {
             let wheelStopTimer = null;
             let wheelDirection = null;
-            const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms || 180));
+            const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms ?? 180));
+            const wheelZoomSpeed = Math.max(0, Math.min(1, Number(this.config.ptz.wheel_zoom_speed ?? 0.20)));
+            const wheelUsesJoystick = joystickEnabled && wheelZoomSpeed > 0;
             player.addEventListener('wheel', ev => {
                 const digitallyZoomed = isDigitallyZoomed();
                 if (digitallyZoomed || ev.ctrlKey) {
@@ -742,21 +807,33 @@ class WebRTCCamera extends VideoRTC {
                 }
 
                 const direction = ev.deltaY < 0 ? 'zoom_in' : 'zoom_out';
-                if (wheelStopTimer && wheelDirection !== direction) {
-                    clearTimeout(wheelStopTimer);
-                    handle('end_' + wheelDirection);
-                    wheelStopTimer = null;
+                if (wheelUsesJoystick) {
+                    const zoom = direction === 'zoom_in' ? wheelZoomSpeed : -wheelZoomSpeed;
+                    handle('joystick', {pan:0, tilt:0, zoom, speed:wheelZoomSpeed});
+                    wheelDirection = direction;
+                    if (wheelStopTimer) clearTimeout(wheelStopTimer);
+                    wheelStopTimer = setTimeout(() => {
+                        handle('joystick_stop');
+                        wheelStopTimer = null;
+                        wheelDirection = null;
+                    }, pulseMs);
+                } else {
+                    if (wheelStopTimer && wheelDirection !== direction) {
+                        clearTimeout(wheelStopTimer);
+                        handle('end_' + wheelDirection);
+                        wheelStopTimer = null;
+                    }
+                    if (!wheelStopTimer || wheelDirection !== direction) {
+                        handle('start_' + direction);
+                    }
+                    wheelDirection = direction;
+                    if (wheelStopTimer) clearTimeout(wheelStopTimer);
+                    wheelStopTimer = setTimeout(() => {
+                        handle('end_' + wheelDirection);
+                        wheelStopTimer = null;
+                        wheelDirection = null;
+                    }, pulseMs);
                 }
-                if (!wheelStopTimer || wheelDirection !== direction) {
-                    handle('start_' + direction);
-                }
-                wheelDirection = direction;
-                if (wheelStopTimer) clearTimeout(wheelStopTimer);
-                wheelStopTimer = setTimeout(() => {
-                    handle('end_' + wheelDirection);
-                    wheelStopTimer = null;
-                    wheelDirection = null;
-                }, pulseMs);
                 ev.preventDefault();
                 ev.stopPropagation();
             }, {passive:false});

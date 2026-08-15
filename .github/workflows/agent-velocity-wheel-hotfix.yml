@@ -1,0 +1,28 @@
+name: Apply velocity wheel hotfix
+on:
+  push:
+    branches: [agent/velocity-wheel-hotfix]
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[agent-wheel-hotfix-done]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python tools/agent_velocity_wheel_hotfix.py
+      - run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - run: python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - run: rm -f tools/agent_velocity_wheel_hotfix.py .github/workflows/agent-velocity-wheel-hotfix.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Fix velocity wheel capability gating [agent-wheel-hotfix-done]'
+          git push

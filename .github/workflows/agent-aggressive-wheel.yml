@@ -1,0 +1,31 @@
+name: Apply aggressive wheel response patch
+on:
+  push:
+    branches: [agent/aggressive-wheel-response]
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[agent-wheel-response-done]') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/aggressive-wheel-response
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python tools/agent_aggressive_wheel.py
+      - run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - run: python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - run: rm -f tools/agent_aggressive_wheel.py .github/workflows/agent-aggressive-wheel.yml
+      - run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json tools/agent_aggressive_wheel.py .github/workflows/agent-aggressive-wheel.yml
+          git commit -m 'Improve mouse-wheel zoom response [agent-wheel-response-done]'
+          git push

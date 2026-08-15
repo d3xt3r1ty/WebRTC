@@ -1023,7 +1023,12 @@ class WebRTCCamera extends VideoRTC {
             this.config.ptz.data_start_zoom_in && this.config.ptz.data_end_zoom_in &&
             this.config.ptz.data_start_zoom_out && this.config.ptz.data_end_zoom_out
         );
-        const hasPhysicalWheelZoom = showZoomSlider || joystickEnabled || hasLegacyPhysicalWheelZoom;
+        const hasContinuousZoom = Boolean(
+            this.config.ptz.service &&
+            this.config.ptz.data_joystick &&
+            this.config.ptz.data_joystick_stop
+        );
+        const hasPhysicalWheelZoom = showZoomSlider || hasContinuousZoom || hasLegacyPhysicalWheelZoom;
         if (hasPhysicalWheelZoom) {
             let wheelStopTimer = null;
             let wheelDirection = null;
@@ -1032,13 +1037,16 @@ class WebRTCCamera extends VideoRTC {
             let lastVelocitySend = 0;
             let lastVelocitySpeed = 0;
             const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms ?? 300));
-            const wheelMode = String(this.config.ptz.wheel_zoom_mode ?? (joystickEnabled ? 'velocity' : 'absolute')).toLowerCase();
-            const velocityWheel = wheelMode === 'velocity' && joystickEnabled;
+            const requestedWheelMode = String(this.config.ptz.wheel_zoom_mode ?? (hasContinuousZoom ? 'velocity' : 'absolute')).toLowerCase();
+            const wheelMode = requestedWheelMode === 'velocity' && !hasContinuousZoom && showZoomSlider ? 'absolute' : requestedWheelMode;
+            const velocityWheel = wheelMode === 'velocity' && hasContinuousZoom;
             const configuredMinWheelSpeed = Number(this.config.ptz.wheel_zoom_min_speed ?? 0.08);
             const configuredMaxWheelSpeed = Number(this.config.ptz.wheel_zoom_max_speed ?? 1.0);
             const minWheelSpeed = Math.max(0, Math.min(1, Number.isFinite(configuredMinWheelSpeed) ? configuredMinWheelSpeed : 0.08));
             const maxWheelSpeed = Math.max(minWheelSpeed, Math.min(1, Number.isFinite(configuredMaxWheelSpeed) ? configuredMaxWheelSpeed : 1.0));
-            const wheelCurve = Math.max(0.2, Number(this.config.ptz.wheel_zoom_curve ?? 1.6));
+            // Expo convention: larger values make the response more aggressive.
+            // wheel_zoom_curve remains accepted as a backwards-compatible alias.
+            const wheelExpo = Math.max(0.2, Number(this.config.ptz.wheel_zoom_expo ?? this.config.ptz.wheel_zoom_curve ?? 1.6));
             const wheelRamp = Math.max(0.01, Math.min(1, Number(this.config.ptz.wheel_zoom_ramp ?? 0.35)));
             const wheelDeltaReference = Math.max(1, Number(this.config.ptz.wheel_zoom_delta_reference ?? 120));
             const wheelCadenceMs = Math.max(16, Number(this.config.ptz.wheel_zoom_cadence_ms ?? 120));
@@ -1085,11 +1093,14 @@ class WebRTCCamera extends VideoRTC {
                     const dt = hadRecentEvent ? Math.max(8, now - lastWheelEvent) : wheelCadenceMs;
                     const deltaIntensity = Math.min(1, delta / wheelDeltaReference);
                     const cadenceIntensity = hadRecentEvent ? Math.min(1, wheelCadenceMs / dt) : 0;
-                    const instantaneous = Math.min(1, deltaIntensity * cadenceIntensity);
-                    if (!hadRecentEvent || reversing) wheelIntensity = 0;
-                    wheelIntensity += (instantaneous - wheelIntensity) * wheelRamp;
+                    // A large free-spin delta OR a rapid cadence can demand high speed.
+                    // Do not multiply them: that made the first/large event artificially slow.
+                    const instantaneous = Math.max(deltaIntensity, cadenceIntensity);
+                    if (!hadRecentEvent || reversing) wheelIntensity = instantaneous;
+                    else wheelIntensity += (instantaneous - wheelIntensity) * wheelRamp;
                     wheelIntensity = Math.max(0, Math.min(1, wheelIntensity));
-                    const speed = minWheelSpeed + (maxWheelSpeed - minWheelSpeed) * Math.pow(wheelIntensity, wheelCurve);
+                    const shapedIntensity = 1 - Math.pow(1 - wheelIntensity, wheelExpo);
+                    const speed = minWheelSpeed + (maxWheelSpeed - minWheelSpeed) * shapedIntensity;
                     const zoom = direction === 'zoom_in' ? speed : -speed;
                     const shouldSend = wheelDirection !== direction ||
                         now - lastVelocitySend >= velocityUpdateMs ||

@@ -430,9 +430,8 @@ class WebRTCCamera extends VideoRTC {
         const hasEntityWheelZoom = Boolean(
             this.config.ptz?.zoom_entity && this.config.ptz?.zoom_slider !== false
         );
-        const hasJoystickWheelZoom = Boolean(
+        const hasContinuousWheelZoom = Boolean(
             this.config.ptz?.service &&
-            this.config.ptz?.joystick &&
             this.config.ptz?.data_joystick &&
             this.config.ptz?.data_joystick_stop
         );
@@ -441,7 +440,7 @@ class WebRTCCamera extends VideoRTC {
             this.config.ptz?.data_start_zoom_in && this.config.ptz?.data_end_zoom_in &&
             this.config.ptz?.data_start_zoom_out && this.config.ptz?.data_end_zoom_out
         );
-        const hasPhysicalWheelZoom = hasEntityWheelZoom || hasJoystickWheelZoom || hasLegacyWheelZoom;
+        const hasPhysicalWheelZoom = hasEntityWheelZoom || hasContinuousWheelZoom || hasLegacyWheelZoom;
         if (hasPhysicalWheelZoom) digitalOptions.mouse_wheel_zoom = false;
         this.digitalPTZ = new DigitalPTZ(
             this.querySelector('.player'),
@@ -653,11 +652,13 @@ class WebRTCCamera extends VideoRTC {
         const showZoomSlider = Boolean(zoomEntity && this.config.ptz.zoom_slider !== false);
         if (!this.config.ptz.service && !showZoomSlider) return;
 
-        const joystickEnabled = Boolean(
+        const continuousZoomEnabled = Boolean(
             this.config.ptz.service &&
-            this.config.ptz.joystick &&
             this.config.ptz.data_joystick &&
             this.config.ptz.data_joystick_stop
+        );
+        const joystickEnabled = Boolean(
+            continuousZoomEnabled && this.config.ptz.joystick
         );
         const physicalDrag = joystickEnabled && this.config.ptz.physical_drag !== false;
         const joystickMode = String(this.config.ptz.joystick_mode || 'dynamic').toLowerCase();
@@ -1023,7 +1024,7 @@ class WebRTCCamera extends VideoRTC {
             this.config.ptz.data_start_zoom_in && this.config.ptz.data_end_zoom_in &&
             this.config.ptz.data_start_zoom_out && this.config.ptz.data_end_zoom_out
         );
-        const hasPhysicalWheelZoom = showZoomSlider || joystickEnabled || hasLegacyPhysicalWheelZoom;
+        const hasPhysicalWheelZoom = showZoomSlider || continuousZoomEnabled || hasLegacyPhysicalWheelZoom;
         if (hasPhysicalWheelZoom) {
             let wheelStopTimer = null;
             let wheelDirection = null;
@@ -1032,8 +1033,8 @@ class WebRTCCamera extends VideoRTC {
             let lastVelocitySend = 0;
             let lastVelocitySpeed = 0;
             const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms ?? 300));
-            const wheelMode = String(this.config.ptz.wheel_zoom_mode ?? (joystickEnabled ? 'velocity' : 'absolute')).toLowerCase();
-            const velocityWheel = wheelMode === 'velocity' && joystickEnabled;
+            const wheelMode = String(this.config.ptz.wheel_zoom_mode ?? (continuousZoomEnabled ? 'velocity' : 'absolute')).toLowerCase();
+            const velocityWheel = wheelMode === 'velocity' && continuousZoomEnabled;
             const configuredMinWheelSpeed = Number(this.config.ptz.wheel_zoom_min_speed ?? 0.08);
             const configuredMaxWheelSpeed = Number(this.config.ptz.wheel_zoom_max_speed ?? 1.0);
             const minWheelSpeed = Math.max(0, Math.min(1, Number.isFinite(configuredMinWheelSpeed) ? configuredMinWheelSpeed : 0.08));
@@ -1103,9 +1104,9 @@ class WebRTCCamera extends VideoRTC {
                     lastWheelEvent = now;
                     if (wheelStopTimer) clearTimeout(wheelStopTimer);
                     wheelStopTimer = setTimeout(stopVelocityWheel, pulseMs);
-                } else if (wheelMode === 'absolute' && showZoomSlider) {
+                } else if ((wheelMode === 'absolute' || (wheelMode === 'velocity' && !continuousZoomEnabled)) && showZoomSlider) {
                     entityWheelZoom?.(direction);
-                } else if (joystickEnabled && fixedWheelSpeed > 0) {
+                } else if (continuousZoomEnabled && fixedWheelSpeed > 0) {
                     const zoom = direction === 'zoom_in' ? fixedWheelSpeed : -fixedWheelSpeed;
                     handle('joystick', {pan:0, tilt:0, zoom, speed:fixedWheelSpeed});
                     wheelDirection = direction;

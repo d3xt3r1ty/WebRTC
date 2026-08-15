@@ -19,6 +19,7 @@ export class DigitalPTZ {
       this.transform.updateRects(this.videoEl, this.containerEl);
       this.transform.zoomAtCoords(1, 0, 0); // clamp transform
       this.render();
+      if (this.onRectsChanged) this.onRectsChanged();
     };
     this.render = (transition = false) => {
       if (transition) {
@@ -61,6 +62,36 @@ export class DigitalPTZ {
         (this.videoEl.tagName === "VIDEO" && this.videoEl.readyState >= 1)) {
       this.mediaReadyHandler();
     }
+  }
+  reset() {
+    if (!this.transform.videoRect) return false;
+    this.transform.setView(1, 0.5, 0.5);
+    this.render(true);
+    return true;
+  }
+  fitRegions(regions, options = {}) {
+    if (!this.transform.videoRect || !this.transform.containerRect || !Array.isArray(regions) || !regions.length) return false;
+    const boxes = regions.map(r => r && r.bbox).filter(b => Array.isArray(b) && b.length === 4);
+    if (!boxes.length) return false;
+    let x1 = Math.min(...boxes.map(b => Math.min(Number(b[0]), Number(b[2]))));
+    let y1 = Math.min(...boxes.map(b => Math.min(Number(b[1]), Number(b[3]))));
+    let x2 = Math.max(...boxes.map(b => Math.max(Number(b[0]), Number(b[2]))));
+    let y2 = Math.max(...boxes.map(b => Math.max(Number(b[1]), Number(b[3]))));
+    if (![x1,y1,x2,y2].every(Number.isFinite)) return false;
+    const padding = Math.max(0, Number(options.padding ?? 0));
+    const w = Math.max(0.0001, x2-x1), h = Math.max(0.0001, y2-y1);
+    x1 = Math.max(0, x1-w*padding); x2 = Math.min(1, x2+w*padding);
+    y1 = Math.max(0, y1-h*padding); y2 = Math.min(1, y2+h*padding);
+    const rw = Math.max(0.0001, x2-x1), rh = Math.max(0.0001, y2-y1);
+    const tr = this.transform;
+    const scaleX = tr.containerRect.width / Math.max(1, tr.videoRect.width * rw);
+    const scaleY = tr.containerRect.height / Math.max(1, tr.videoRect.height * rh);
+    const minScale = Math.max(1, Number(options.minScale ?? 1));
+    const maxScale = Math.max(minScale, Number(options.maxScale ?? MAX_ZOOM));
+    const scale = clamp(Math.min(scaleX, scaleY), minScale, Math.min(MAX_ZOOM, maxScale));
+    tr.setView(scale, (x1+x2)/2, (y1+y2)/2);
+    this.render(true);
+    return true;
   }
   destroy() {
     for (const off of this.offHandles) off();
@@ -323,6 +354,14 @@ class Transform {
     this.y += dy / this.videoRect.height;
     this.x = clamp(this.x, -bound, bound);
     this.y = clamp(this.y, -bound, bound);
+    this.persistTransform();
+  }
+  setView(scale, centerX = 0.5, centerY = 0.5) {
+    if (!this.videoRect) return;
+    this.scale = clamp(Number(scale) || 1, 1, MAX_ZOOM);
+    const bound = (this.scale - 1) / 2;
+    this.x = clamp(-(Number(centerX) - 0.5) * this.scale, -bound, bound);
+    this.y = clamp(-(Number(centerY) - 0.5) * this.scale, -bound, bound);
     this.persistTransform();
   }
   // x,y are relative to viewport (clientX, clientY)

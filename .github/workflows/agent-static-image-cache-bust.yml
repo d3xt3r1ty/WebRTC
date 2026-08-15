@@ -1,0 +1,30 @@
+name: Apply static image cache-bust patch
+on:
+  push:
+    branches: [agent/static-image-cache-bust]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, '[agent-cache-done]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/static-image-cache-bust
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python tools/agent_static_image_cache_bust.py
+      - run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - run: python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - run: |
+          rm -f tools/agent_static_image_cache_bust.py .github/workflows/agent-static-image-cache-bust.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json tools/agent_static_image_cache_bust.py .github/workflows/agent-static-image-cache-bust.yml
+          git commit -m 'Bust cache for static image revisions [agent-cache-done]'
+          git push

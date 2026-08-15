@@ -92,6 +92,25 @@ class WebRTCCamera extends VideoRTC {
         if (state?.attributes?.entity_picture) source = state.attributes.entity_picture;
         if (!source) return;
         if (!/^https?:\/\//i.test(source)) source = this.hass.hassUrl(source);
+
+        // HA image entities often keep a stable entity_picture URL while the
+        // underlying JPEG changes. Give each snapshot revision its own URL so
+        // browser/proxy caches cannot leave a newly-opened card one image behind.
+        const revision = state?.attributes?.event_id ||
+            state?.attributes?.snapshot_id ||
+            state?.attributes?.timestamp ||
+            state?.last_updated;
+        if (revision) {
+            try {
+                const url = new URL(source, window.location.href);
+                url.searchParams.set('_webrtc_v', String(revision));
+                source = url.toString();
+            } catch (err) {
+                const separator = source.includes('?') ? '&' : '?';
+                source += `${separator}_webrtc_v=${encodeURIComponent(String(revision))}`;
+            }
+        }
+
         if (this.staticImage.src !== source) this.staticImage.src = source;
     }
 

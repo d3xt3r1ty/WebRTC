@@ -1,0 +1,40 @@
+name: Patch direct slider target retention
+on:
+  push:
+    branches: [agent/slider-target-retention]
+    paths: [.github/workflows/agent-slider-target-retention.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+          old='''                sliderActive = false;\n                pendingTarget = Number(range.value);\n                pendingUntil = Date.now() + syncTimeoutMs;\n                sendZoom(range.value);\n'''
+          new='''                sliderActive = false;\n                pendingTarget = Number(range.value);\n                // Direct slider placement is a commanded target just like predictive\n                // wheel zoom. Keep the thumb at that target while the reported\n                // physical position (track fill) catches up.\n                pendingUntil = Date.now() + predictiveDisplayTimeoutMs;\n                sendZoom(range.value);\n'''
+          if old not in s:
+              raise SystemExit('slider finish block not found')
+          p.write_text(s.replace(old,new,1))
+          p=Path('custom_components/webrtc/manifest.json')
+          s=p.read_text()
+          if '"version": "3.6.11"' not in s:
+              raise SystemExit('manifest version not 3.6.11')
+          p.write_text(s.replace('"version": "3.6.11"','"version": "3.6.12"',1))
+          PY
+      - name: Validate
+        run: |
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Keep direct slider target visible during travel"
+          git push

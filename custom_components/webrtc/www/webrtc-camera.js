@@ -838,7 +838,10 @@ class WebRTCCamera extends VideoRTC {
                 if (!sliderActive) return;
                 sliderActive = false;
                 pendingTarget = Number(range.value);
-                pendingUntil = Date.now() + syncTimeoutMs;
+                // Direct slider placement is a commanded target just like predictive
+                // wheel zoom. Keep the thumb at that target while the reported
+                // physical position (track fill) catches up.
+                pendingUntil = Date.now() + predictiveDisplayTimeoutMs;
                 sendZoom(range.value);
                 ev?.stopPropagation?.();
             };

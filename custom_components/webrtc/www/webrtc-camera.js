@@ -740,7 +740,22 @@ class WebRTCCamera extends VideoRTC {
                 .ptz-zoom-slider { display:${showZoomSlider ? 'flex' : 'none'}; align-items:center; justify-content:center; gap:6px; padding:7px 6px; border-radius:6px; background:rgba(0,0,0,.3); color:white; font-size:12px; }
                 .ptz-zoom-slider.vertical { flex-direction:column; min-height:150px; }
                 .ptz-zoom-slider.horizontal { flex-direction:row; min-width:170px; }
-                .ptz-zoom-slider input { accent-color:var(--primary-color); cursor:pointer; }
+                .ptz-zoom-slider input {
+                    --webrtc-zoom-actual:0%;
+                    -webkit-appearance:none; appearance:none;
+                    height:4px; border-radius:999px; cursor:pointer;
+                    background:linear-gradient(to right, var(--primary-color) 0 var(--webrtc-zoom-actual), rgba(255,255,255,.28) var(--webrtc-zoom-actual) 100%);
+                }
+                .ptz-zoom-slider input::-webkit-slider-runnable-track { height:4px; background:transparent; border:none; }
+                .ptz-zoom-slider input::-webkit-slider-thumb {
+                    -webkit-appearance:none; appearance:none; width:14px; height:14px; margin-top:-5px;
+                    border-radius:50%; border:2px solid rgba(255,255,255,.9); background:var(--primary-color);
+                }
+                .ptz-zoom-slider input::-moz-range-track { height:4px; background:transparent; border:none; }
+                .ptz-zoom-slider input::-moz-range-progress { background:transparent; }
+                .ptz-zoom-slider input::-moz-range-thumb {
+                    width:12px; height:12px; border-radius:50%; border:2px solid rgba(255,255,255,.9); background:var(--primary-color);
+                }
                 .ptz-zoom-slider.vertical input { width:120px; transform:rotate(-90deg); margin:48px -42px; }
                 .ptz-zoom-slider.horizontal input { width:120px; }
                 .ptz-zoom-value { min-width:34px; text-align:center; font-variant-numeric:tabular-nums; }
@@ -780,6 +795,13 @@ class WebRTCCamera extends VideoRTC {
             const wheelUpdateMs = Math.max(40, Number(this.config.ptz.wheel_zoom_update_ms ?? 100));
             const wheelSettleMs = Math.max(60, Number(this.config.ptz.wheel_zoom_settle_ms ?? 160));
             const syncTimeoutMs = Math.max(300, Number(this.config.ptz.wheel_zoom_sync_timeout_ms ?? 1500));
+            const predictiveDisplayTimeoutMs = Math.max(syncTimeoutMs, Number(this.config.ptz.wheel_zoom_target_display_timeout_ms ?? 10000));
+            const setActualFill = (value, min, max) => {
+                const lo = Number.isFinite(min) ? min : 0;
+                const hi = Number.isFinite(max) && max > lo ? max : 100;
+                const pct = Math.max(0, Math.min(100, (Number(value) - lo) * 100 / (hi - lo)));
+                range.style.setProperty('--webrtc-zoom-actual', `${pct}%`);
+            };
             const sendZoom = value => {
                 const numeric = Number(value);
                 if (!Number.isFinite(numeric) || numeric === lastSent) return Promise.resolve();
@@ -798,6 +820,7 @@ class WebRTCCamera extends VideoRTC {
                 range.min = String(Number.isFinite(min) ? min : 0);
                 range.max = String(Number.isFinite(max) ? max : 100);
                 range.step = String(Number.isFinite(step) && step > 0 ? step : 1);
+                setActualFill(value, min, max);
                 if (pendingTarget !== null) {
                     const tolerance = Math.max(0.05, Math.abs(Number(range.step)) / 2);
                     if (Math.abs(value - pendingTarget) <= tolerance || Date.now() > pendingUntil) pendingTarget = null;
@@ -871,7 +894,7 @@ class WebRTCCamera extends VideoRTC {
                     const numeric = Number(value);
                     if (!Number.isFinite(numeric)) return;
                     pendingTarget = numeric;
-                    pendingUntil = Date.now() + syncTimeoutMs;
+                    pendingUntil = Date.now() + predictiveDisplayTimeoutMs;
                     range.value = String(numeric);
                     label.textContent = `${Math.round(numeric)}%`;
                 },

@@ -766,6 +766,7 @@ class WebRTCCamera extends VideoRTC {
         const isDigitallyZoomed = () => Boolean(this.digitalPTZ && this.digitalPTZ.transform && this.digitalPTZ.transform.scale > 1.001);
 
         let entityWheelZoom = null;
+        let predictiveWheelZoom = null;
         if (showZoomSlider) {
             const range = this.querySelector('.ptz-zoom-range');
             const label = this.querySelector('.ptz-zoom-value');
@@ -850,6 +851,31 @@ class WebRTCCamera extends VideoRTC {
                     lastWheelSend = performance.now();
                     sendZoom(pendingTarget);
                 }, wheelSettleMs);
+            };
+
+            predictiveWheelZoom = {
+                getPosition: () => {
+                    const state = this.hass?.states?.[zoomEntity];
+                    const reported = Number(state?.state);
+                    if (!Number.isFinite(reported)) return null;
+                    const min = Number(state.attributes?.min ?? 0);
+                    const max = Number(state.attributes?.max ?? 100);
+                    return {
+                        value: pendingTarget !== null ? pendingTarget : reported,
+                        reported,
+                        min: Number.isFinite(min) ? min : 0,
+                        max: Number.isFinite(max) ? max : 100,
+                    };
+                },
+                showTarget: value => {
+                    const numeric = Number(value);
+                    if (!Number.isFinite(numeric)) return;
+                    pendingTarget = numeric;
+                    pendingUntil = Date.now() + syncTimeoutMs;
+                    range.value = String(numeric);
+                    label.textContent = `${Math.round(numeric)}%`;
+                },
+                sendTarget: value => sendZoom(value),
             };
         }
 
@@ -1036,22 +1062,105 @@ class WebRTCCamera extends VideoRTC {
             let lastWheelEvent = 0;
             let lastVelocitySend = 0;
             let lastVelocitySpeed = 0;
+
             const pulseMs = Math.max(80, Number(this.config.ptz.wheel_zoom_pulse_ms ?? 300));
             const requestedWheelMode = String(this.config.ptz.wheel_zoom_mode ?? (hasContinuousZoom ? 'velocity' : 'absolute')).toLowerCase();
-            const wheelMode = requestedWheelMode === 'velocity' && !hasContinuousZoom && showZoomSlider ? 'absolute' : requestedWheelMode;
+            const wheelMode = (requestedWheelMode === 'predictive' || requestedWheelMode === 'target') && showZoomSlider
+                ? 'predictive'
+                : requestedWheelMode === 'velocity' && !hasContinuousZoom && showZoomSlider
+                    ? 'absolute'
+                    : requestedWheelMode;
             const velocityWheel = wheelMode === 'velocity' && hasContinuousZoom;
+            const predictiveWheel = wheelMode === 'predictive' && Boolean(predictiveWheelZoom);
+
             const configuredMinWheelSpeed = Number(this.config.ptz.wheel_zoom_min_speed ?? 0.08);
             const configuredMaxWheelSpeed = Number(this.config.ptz.wheel_zoom_max_speed ?? 1.0);
             const minWheelSpeed = Math.max(0, Math.min(1, Number.isFinite(configuredMinWheelSpeed) ? configuredMinWheelSpeed : 0.08));
             const maxWheelSpeed = Math.max(minWheelSpeed, Math.min(1, Number.isFinite(configuredMaxWheelSpeed) ? configuredMaxWheelSpeed : 1.0));
-            // Expo convention: larger values make the response more aggressive.
-            // wheel_zoom_curve remains accepted as a backwards-compatible alias.
             const wheelExpo = Math.max(0.2, Number(this.config.ptz.wheel_zoom_expo ?? this.config.ptz.wheel_zoom_curve ?? 1.6));
             const wheelRamp = Math.max(0.01, Math.min(1, Number(this.config.ptz.wheel_zoom_ramp ?? 0.35)));
             const wheelDeltaReference = Math.max(1, Number(this.config.ptz.wheel_zoom_delta_reference ?? 120));
             const wheelCadenceMs = Math.max(16, Number(this.config.ptz.wheel_zoom_cadence_ms ?? 120));
             const velocityUpdateMs = Math.max(30, Number(this.config.ptz.wheel_zoom_velocity_update_ms ?? 80));
             const fixedWheelSpeed = Math.max(0, Math.min(1, Number(this.config.ptz.wheel_zoom_speed ?? 0.20)));
+
+            // Predictive absolute-position model. Wheel cadence becomes positional
+            // intent; the camera receives a sparse DRIVE -> optional RE-DRIVE -> FINAL
+            // sequence while the slider follows the virtual final target optimistically.
+            const predictiveGain = Math.max(0.01, Number(this.config.ptz.wheel_zoom_target_gain ?? 0.5));
+            const predictiveMeasureMs = Math.max(10, Number(this.config.ptz.wheel_zoom_measure_ms ?? 50));
+            const predictiveSettleMs = Math.max(80, Number(this.config.ptz.wheel_zoom_target_settle_ms ?? 350));
+            const predictiveLookMin = Math.max(0, Number(this.config.ptz.wheel_zoom_lookahead_min ?? 5));
+            const predictiveLookMax = Math.max(predictiveLookMin, Number(this.config.ptz.wheel_zoom_lookahead_max ?? 100));
+            const predictiveFullRate = Math.max(1, Number(this.config.ptz.wheel_zoom_full_rate ?? 80));
+            const predictiveExpo = Math.max(0.05, Number(this.config.ptz.wheel_zoom_lookahead_expo ?? 0.3));
+            const predictiveSmoothing = Math.max(0.01, Math.min(1, Number(this.config.ptz.wheel_zoom_cadence_smoothing ?? 0.35)));
+            const predictiveReverseMs = Math.max(0, Number(this.config.ptz.wheel_zoom_reverse_ms ?? 120));
+
+            let predictiveState = 'idle';
+            let predictiveVirtual = null;
+            let predictiveDrive = null;
+            let predictiveDirection = 0;
+            let predictiveLastEvent = 0;
+            let predictiveRawRate = 0;
+            let predictiveSmoothRate = 0;
+            let predictiveMeasureTimer = null;
+            let predictiveSettleTimer = null;
+            let predictiveRedriveUsed = false;
+            let predictiveLastDirectionChange = 0;
+
+            const predictiveClamp = (value, position) => Math.max(position.min, Math.min(position.max, value));
+            const predictiveLookahead = rate => {
+                const x = Math.max(0, Math.min(1, rate / predictiveFullRate));
+                const shaped = 1 - Math.pow(1 - x, predictiveExpo);
+                return predictiveLookMin + (predictiveLookMax - predictiveLookMin) * shaped;
+            };
+            const clearPredictiveTimers = () => {
+                if (predictiveMeasureTimer) clearTimeout(predictiveMeasureTimer);
+                if (predictiveSettleTimer) clearTimeout(predictiveSettleTimer);
+                predictiveMeasureTimer = predictiveSettleTimer = null;
+            };
+            const resetPredictive = () => {
+                clearPredictiveTimers();
+                predictiveState = 'idle';
+                predictiveVirtual = predictiveDrive = null;
+                predictiveDirection = 0;
+                predictiveLastEvent = 0;
+                predictiveRawRate = predictiveSmoothRate = 0;
+                predictiveRedriveUsed = false;
+            };
+            const launchPredictive = () => {
+                if (predictiveState !== 'measuring' || predictiveVirtual === null) return;
+                const position = predictiveWheelZoom?.getPosition();
+                if (!position) { resetPredictive(); return; }
+                const look = predictiveLookahead(predictiveSmoothRate || predictiveRawRate || 0);
+                predictiveDrive = predictiveClamp(predictiveVirtual + predictiveDirection * look, position);
+                predictiveWheelZoom.sendTarget(predictiveDrive);
+                predictiveState = 'active';
+            };
+            const finishPredictive = () => {
+                if (predictiveState === 'idle' || predictiveVirtual === null) return;
+                if (predictiveState === 'measuring') launchPredictive();
+                predictiveWheelZoom?.showTarget(predictiveVirtual);
+                predictiveWheelZoom?.sendTarget(predictiveVirtual);
+                resetPredictive();
+            };
+            const startPredictive = (now, direction) => {
+                const position = predictiveWheelZoom?.getPosition();
+                if (!position) return false;
+                clearPredictiveTimers();
+                predictiveState = 'measuring';
+                predictiveVirtual = position.value;
+                predictiveDrive = null;
+                predictiveDirection = direction;
+                predictiveLastEvent = 0;
+                predictiveRawRate = predictiveSmoothRate = 0;
+                predictiveRedriveUsed = false;
+                predictiveLastDirectionChange = now;
+                predictiveMeasureTimer = setTimeout(launchPredictive, predictiveMeasureMs);
+                return true;
+            };
+
             const stopVelocityWheel = () => {
                 if (wheelStopTimer) clearTimeout(wheelStopTimer);
                 wheelStopTimer = null;
@@ -1062,10 +1171,12 @@ class WebRTCCamera extends VideoRTC {
                 lastVelocitySend = 0;
                 lastVelocitySpeed = 0;
             };
+
             player.addEventListener('wheel', ev => {
                 const digitallyZoomed = isDigitallyZoomed();
                 if (this.digitalPTZ && (digitallyZoomed || ev.ctrlKey)) {
                     if (velocityWheel && wheelDirection !== null) stopVelocityWheel();
+                    if (predictiveWheel && predictiveState !== 'idle') finishPredictive();
                     const zoom = 1 - ev.deltaY / 1000;
                     this.digitalPTZ.transform.zoomAtCoords(zoom, ev.pageX, ev.pageY);
                     this.digitalPTZ.render();
@@ -1075,7 +1186,54 @@ class WebRTCCamera extends VideoRTC {
                 }
 
                 const direction = ev.deltaY < 0 ? 'zoom_in' : 'zoom_out';
-                if (velocityWheel) {
+                if (predictiveWheel) {
+                    const now = performance.now();
+                    const dir = direction === 'zoom_in' ? 1 : -1;
+                    if (predictiveState === 'idle' && !startPredictive(now, dir)) return;
+
+                    if (dir !== predictiveDirection && now - predictiveLastDirectionChange >= predictiveReverseMs) {
+                        // Finish the old intended target, then treat reversal as a new gesture.
+                        finishPredictive();
+                        if (!startPredictive(now, dir)) return;
+                    }
+
+                    const dt = predictiveLastEvent ? Math.max(1, now - predictiveLastEvent) : 0;
+                    if (dt) {
+                        predictiveRawRate = 1000 / dt;
+                        predictiveSmoothRate = predictiveSmoothRate
+                            ? predictiveSmoothRate + (predictiveRawRate - predictiveSmoothRate) * predictiveSmoothing
+                            : predictiveRawRate;
+                    } else {
+                        predictiveRawRate = 0;
+                    }
+
+                    const position = predictiveWheelZoom.getPosition();
+                    if (!position) { resetPredictive(); return; }
+                    predictiveVirtual = predictiveClamp(predictiveVirtual + dir * predictiveGain, position);
+                    predictiveWheelZoom.showTarget(predictiveVirtual);
+
+                    // If the accumulated virtual target catches the original drive target,
+                    // allow exactly one re-drive based on the now-current cadence. This
+                    // restores headroom without falling back into incremental final sends.
+                    if (predictiveState === 'active' && !predictiveRedriveUsed && predictiveDrive !== null) {
+                        const caught = predictiveDirection > 0
+                            ? predictiveVirtual >= predictiveDrive
+                            : predictiveVirtual <= predictiveDrive;
+                        if (caught && predictiveVirtual > position.min && predictiveVirtual < position.max) {
+                            const look = predictiveLookahead(predictiveSmoothRate || predictiveRawRate || 0);
+                            const newDrive = predictiveClamp(predictiveVirtual + predictiveDirection * look, position);
+                            if (Math.abs(newDrive - predictiveDrive) >= 0.5) {
+                                predictiveDrive = newDrive;
+                                predictiveRedriveUsed = true;
+                                predictiveWheelZoom.sendTarget(predictiveDrive);
+                            }
+                        }
+                    }
+
+                    predictiveLastEvent = now;
+                    if (predictiveSettleTimer) clearTimeout(predictiveSettleTimer);
+                    predictiveSettleTimer = setTimeout(finishPredictive, predictiveSettleMs);
+                } else if (velocityWheel) {
                     const now = performance.now();
                     const reversing = wheelDirection !== null && wheelDirection !== direction;
                     if (reversing) {
@@ -1093,8 +1251,6 @@ class WebRTCCamera extends VideoRTC {
                     const dt = hadRecentEvent ? Math.max(8, now - lastWheelEvent) : wheelCadenceMs;
                     const deltaIntensity = Math.min(1, delta / wheelDeltaReference);
                     const cadenceIntensity = hadRecentEvent ? Math.min(1, wheelCadenceMs / dt) : 0;
-                    // A large free-spin delta OR a rapid cadence can demand high speed.
-                    // Do not multiply them: that made the first/large event artificially slow.
                     const instantaneous = Math.max(deltaIntensity, cadenceIntensity);
                     if (!hadRecentEvent || reversing) wheelIntensity = instantaneous;
                     else wheelIntensity += (instantaneous - wheelIntensity) * wheelRamp;
@@ -1116,7 +1272,7 @@ class WebRTCCamera extends VideoRTC {
                     wheelStopTimer = setTimeout(stopVelocityWheel, pulseMs);
                 } else if (wheelMode === 'absolute' && showZoomSlider) {
                     entityWheelZoom?.(direction);
-                } else if (joystickEnabled && fixedWheelSpeed > 0) {
+                } else if (hasContinuousZoom && fixedWheelSpeed > 0) {
                     const zoom = direction === 'zoom_in' ? fixedWheelSpeed : -fixedWheelSpeed;
                     handle('joystick', {pan:0, tilt:0, zoom, speed:fixedWheelSpeed});
                     wheelDirection = direction;

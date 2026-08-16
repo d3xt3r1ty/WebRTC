@@ -28,3 +28,4 @@ jobs:
           git add custom_components/webrtc/www/webrtc-camera.js
           git commit -m "Show target thumb and actual zoom fill"
           git push
+# trigger

@@ -2,6 +2,21 @@
 import {VideoRTC} from './video-rtc.js?v=1.9.9';
 import {DigitalPTZ} from './digital-ptz.js?v=3.4.0';
 
+class WebRTCInitialStream extends VideoRTC {
+    oninit() {
+        super.oninit();
+        this.video.controls = false;
+        this.video.muted = true;
+        this.video.autoplay = true;
+        this.video.playsInline = true;
+        this.video.style.objectFit = 'contain';
+        this.video.style.background = 'black';
+    }
+}
+if (!customElements.get('webrtc-initial-stream')) {
+    customElements.define('webrtc-initial-stream', WebRTCInitialStream);
+}
+
 class WebRTCCamera extends VideoRTC {
     static keepAliveRegistry = [];
 
@@ -180,6 +195,29 @@ class WebRTCCamera extends VideoRTC {
         this.hass.callWS({
             type: 'auth/sign_path', path: '/api/webrtc/ws'
         }).then(data => {
+            const buildStreamURL = stream => {
+                let url = 'ws' + this.hass.hassUrl(data.path).substring(4);
+                if (stream?.entity) url += '&entity=' + encodeURIComponent(stream.entity);
+                else if (stream?.url) url += '&url=' + encodeURIComponent(stream.url);
+                else return '';
+                if (stream?.server) url += '&server=' + encodeURIComponent(stream.server);
+                return url;
+            };
+            if (this.initialStream && this.config.initial_stream) {
+                const initial = typeof this.config.initial_stream === 'string'
+                    ? {url: this.config.initial_stream}
+                    : this.config.initial_stream;
+                const initialURL = buildStreamURL(initial);
+                if (initialURL) {
+                    this._mainStreamReady = false;
+                    this.initialStream.style.display = 'block';
+                    this.initialStream.style.opacity = '1';
+                    this.video.style.opacity = '0';
+                    this.initialStream.ondisconnect();
+                    this.initialStream.wsURL = initialURL;
+                    this.initialStream.onconnect();
+                }
+            }
             if (this.config.poster && !this.config.poster_remote) {
                 this.video.poster = this.hass.hassUrl(data.path) + '&poster=' + encodeURIComponent(this.config.poster);
             }
@@ -262,6 +300,18 @@ class WebRTCCamera extends VideoRTC {
             }
             .player .ptz-transform {
                 height: 100%;
+                position: relative;
+                z-index: 1;
+            }
+            .initial-stream {
+                position: absolute;
+                inset: 0;
+                z-index: 0;
+                width: 100%;
+                height: 100%;
+                pointer-events: none;
+                opacity: 1;
+                transition: opacity 120ms linear;
             }
             .static-image {
                 width: 100%;
@@ -310,6 +360,31 @@ class WebRTCCamera extends VideoRTC {
         `;
 
         this.querySelector = selectors => this.shadowRoot.querySelector(selectors);
+        if (!this.imageMode && this.config.initial_stream) {
+            this.initialStream = document.createElement('webrtc-initial-stream');
+            this.initialStream.className = 'initial-stream';
+            const initialConfig = typeof this.config.initial_stream === 'object' ? this.config.initial_stream : {};
+            this.initialStream.mode = initialConfig.mode || this.config.mode;
+            this.initialStream.media = initialConfig.media || 'video';
+            this.initialStream.visibilityCheck = false;
+            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));
+            this.video.style.opacity = '0';
+            this.video.style.transition = 'opacity 120ms linear';
+            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.video.style.opacity = '1';
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            this.video.addEventListener('playing', finishInitialStream);
+            this.video.addEventListener('loadeddata', finishInitialStream);
+        }
+
         if (this.imageMode) {
             this.staticImage = document.createElement('img');
             this.staticImage.className = 'static-image';
@@ -907,13 +982,16 @@ class WebRTCCamera extends VideoRTC {
 
         if (joystickEnabled) {
             const surface = dynamicJoystick ? player : fixedMove;
+            if (dynamicJoystick) player.style.touchAction = 'none';
             let activePointer = null, originX = 0, originY = 0, moving = false;
             let claimed = false, activePointerType = '', touchBlocked = false;
             const physicalPointers = new Set();
             let lastPan = 0, lastTilt = 0, lastSpeed = 0, lastSend = 0, heartbeat = null;
+            let stopRepeatTimer = null;
             let radius = fixedRadius, deadbandPx = 14;
             const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);
             const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);
+            const stopRepeatMs = Math.max(0, Number(this.config.ptz.joystick_stop_repeat_ms ?? 120));
             const configuredMinSpeed = Number(this.config.ptz.joystick_min_speed ?? 0.03);
             const configuredMaxSpeed = Number(this.config.ptz.joystick_max_speed ?? 1.0);
             const minSpeed = Math.max(0, Math.min(1, Number.isFinite(configuredMinSpeed) ? configuredMinSpeed : 0.03));
@@ -921,11 +999,18 @@ class WebRTCCamera extends VideoRTC {
             const curve = Math.max(0.2, Number(this.config.ptz.joystick_curve ?? 1.9));
 
             const hideDynamic = () => { if (dynamicJoystick) dynamicMove.style.display = 'none'; };
-            const stopMove = () => {
+            const stopMove = (force = false) => {
                 if (heartbeat) clearInterval(heartbeat);
                 heartbeat = null;
-                if (moving) handle('joystick_stop');
+                if (stopRepeatTimer) { clearTimeout(stopRepeatTimer); stopRepeatTimer = null; }
+                if (moving || force) handle('joystick_stop');
                 moving = false; lastPan = lastTilt = lastSpeed = 0;
+                if (force && stopRepeatMs > 0) {
+                    stopRepeatTimer = setTimeout(() => {
+                        stopRepeatTimer = null;
+                        if (activePointer === null && !moving) handle('joystick_stop');
+                    }, stopRepeatMs);
+                }
                 const stick = (dynamicJoystick ? dynamicMove : fixedMove).querySelector('.ptz-stick');
                 if (stick) stick.style.transform = 'translate(0px,0px)';
                 hideDynamic();
@@ -956,13 +1041,14 @@ class WebRTCCamera extends VideoRTC {
             const begin = ev => {
                 if (ev.pointerType === 'mouse' && ev.button !== 0) return;
                 if (dynamicJoystick && isDigitallyZoomed()) return;
+                if (stopRepeatTimer) { clearTimeout(stopRepeatTimer); stopRepeatTimer = null; }
                 physicalPointers.add(ev.pointerId);
                 if (ev.pointerType === 'touch' && physicalPointers.size > 1) {
                     touchBlocked = true;
                     if (activePointer !== null) {
                         activePointer = null;
                         claimed = false;
-                        stopMove();
+                        stopMove(true);
                     }
                     return;
                 }
@@ -1013,7 +1099,7 @@ class WebRTCCamera extends VideoRTC {
                     const owned = claimed;
                     activePointer = null;
                     claimed = false;
-                    stopMove();
+                    stopMove(true);
                     if (owned) { ev.preventDefault(); ev.stopPropagation(); }
                 }
                 if (!physicalPointers.size) touchBlocked = false;
@@ -1024,7 +1110,7 @@ class WebRTCCamera extends VideoRTC {
             surface.addEventListener('pointercancel', end, true);
             surface.addEventListener('lostpointercapture', ev => {
                 physicalPointers.delete(ev.pointerId);
-                if (activePointer===ev.pointerId) { activePointer=null; claimed=false; stopMove(); }
+                if (activePointer===ev.pointerId) { activePointer=null; claimed=false; stopMove(true); }
                 if (!physicalPointers.size) touchBlocked=false;
             });
 

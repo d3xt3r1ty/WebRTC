@@ -212,7 +212,6 @@ class WebRTCCamera extends VideoRTC {
                     this._mainStreamReady = false;
                     this.initialStream.style.display = 'block';
                     this.initialStream.style.opacity = '1';
-                    this.video.style.opacity = '0';
                     this.initialStream.ondisconnect();
                     this.initialStream.wsURL = initialURL;
                     this.initialStream.onconnect();
@@ -306,7 +305,7 @@ class WebRTCCamera extends VideoRTC {
             .initial-stream {
                 position: absolute;
                 inset: 0;
-                z-index: 0;
+                z-index: 2;
                 width: 100%;
                 height: 100%;
                 pointer-events: none;
@@ -367,13 +366,10 @@ class WebRTCCamera extends VideoRTC {
             this.initialStream.mode = initialConfig.mode || this.config.mode;
             this.initialStream.media = initialConfig.media || 'video';
             this.initialStream.visibilityCheck = false;
-            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));
-            this.video.style.opacity = '0';
-            this.video.style.transition = 'opacity 120ms linear';
+            this.querySelector('.player').appendChild(this.initialStream);
             const finishInitialStream = () => {
                 if (!this.initialStream || this._mainStreamReady) return;
                 this._mainStreamReady = true;
-                this.video.style.opacity = '1';
                 this.initialStream.style.opacity = '0';
                 setTimeout(() => {
                     if (!this.initialStream || !this._mainStreamReady) return;

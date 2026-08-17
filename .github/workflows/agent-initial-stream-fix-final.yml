@@ -1,0 +1,112 @@
+name: Patch initial stream fix final
+on:
+  push:
+    branches: [agent/initial-stream-fix-final]
+    paths: [.github/workflows/agent-initial-stream-fix-final.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+          old="""            .player .ptz-transform {
+                height: 100%;
+                position: relative;
+                z-index: 1;
+            }
+            .initial-stream {
+                position: absolute;
+                inset: 0;
+                z-index: 0;
+"""
+          new="""            .player .ptz-transform {
+                height: 100%;
+                position: relative;
+                z-index: 1;
+            }
+            .initial-stream {
+                position: absolute;
+                inset: 0;
+                z-index: 2;
+"""
+          if old not in s: raise SystemExit('initial stream CSS block not found')
+          s=s.replace(old,new,1)
+
+          old="""            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));
+            this.video.style.opacity = '0';
+            this.video.style.transition = 'opacity 120ms linear';
+            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.video.style.opacity = '1';
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            this.video.addEventListener('playing', finishInitialStream);
+            this.video.addEventListener('loadeddata', finishInitialStream);
+"""
+          new="""            this.querySelector('.player').appendChild(this.initialStream);
+            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            const waitForMainFrame = () => {
+                if (this._mainStreamReady) return;
+                if (typeof this.video.requestVideoFrameCallback === 'function') {
+                    this.video.requestVideoFrameCallback(() => finishInitialStream());
+                } else {
+                    requestAnimationFrame(() => finishInitialStream());
+                }
+            };
+            this.video.addEventListener('playing', waitForMainFrame);
+            this.video.addEventListener('loadeddata', waitForMainFrame);
+"""
+          if old not in s: raise SystemExit('initial stream handoff block not found')
+          s=s.replace(old,new,1)
+
+          old="""                    this.initialStream.style.display = 'block';
+                    this.initialStream.style.opacity = '1';
+                    this.video.style.opacity = '0';
+                    this.initialStream.ondisconnect();
+"""
+          new="""                    this.initialStream.style.display = 'block';
+                    this.initialStream.style.opacity = '1';
+                    this.initialStream.ondisconnect();
+"""
+          if old not in s: raise SystemExit('initial stream connect visibility block not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+
+          m=Path('custom_components/webrtc/manifest.json')
+          ms=m.read_text()
+          if '"version": "3.6.13"' not in ms: raise SystemExit('manifest version is not 3.6.13')
+          m.write_text(ms.replace('"version": "3.6.13"','"version": "3.6.14"',1))
+          PY
+      - name: Validate
+        run: |
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Fix initial stream overlay handoff"
+          git push

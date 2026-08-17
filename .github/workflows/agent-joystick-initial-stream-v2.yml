@@ -1,0 +1,86 @@
+name: Patch joystick and initial stream v2
+on:
+  push:
+    branches: [agent/joystick-initial-stream-v2]
+    paths: [.github/workflows/agent-joystick-initial-stream-v2.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+
+          marker="import {DigitalPTZ} from './digital-ptz.js?v=3.4.0';\n\n"
+          insert="""import {DigitalPTZ} from './digital-ptz.js?v=3.4.0';\n\nclass WebRTCInitialStream extends VideoRTC {\n    oninit() {\n        super.oninit();\n        this.video.controls = false;\n        this.video.muted = true;\n        this.video.autoplay = true;\n        this.video.playsInline = true;\n        this.video.style.objectFit = 'contain';\n        this.video.style.background = 'black';\n    }\n}\nif (!customElements.get('webrtc-initial-stream')) {\n    customElements.define('webrtc-initial-stream', WebRTCInitialStream);\n}\n\n"""
+          if marker not in s: raise SystemExit('import marker not found')
+          s=s.replace(marker,insert,1)
+
+          old="""            .player {\n                background-color: black;\n                height: 100%;\n                position: relative;\n            }\n            .player:active {\n                cursor: move;\n            }\n            .player .ptz-transform {\n                height: 100%;\n            }\n"""
+          new="""            .player {\n                background-color: black;\n                height: 100%;\n                position: relative;\n            }\n            .player:active {\n                cursor: move;\n            }\n            .player .ptz-transform {\n                height: 100%;\n                position: relative;\n                z-index: 1;\n            }\n            .initial-stream {\n                position: absolute;\n                inset: 0;\n                z-index: 0;\n                width: 100%;\n                height: 100%;\n                pointer-events: none;\n                opacity: 1;\n                transition: opacity 120ms linear;\n            }\n"""
+          if old not in s: raise SystemExit('player CSS block not found')
+          s=s.replace(old,new,1)
+
+          old="""        if (this.imageMode) {\n            this.staticImage = document.createElement('img');\n"""
+          new="""        if (!this.imageMode && this.config.initial_stream) {\n            this.initialStream = document.createElement('webrtc-initial-stream');\n            this.initialStream.className = 'initial-stream';\n            const initialConfig = typeof this.config.initial_stream === 'object' ? this.config.initial_stream : {};\n            this.initialStream.mode = initialConfig.mode || this.config.mode;\n            this.initialStream.media = initialConfig.media || 'video';\n            this.initialStream.visibilityCheck = false;\n            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));\n            this.video.style.opacity = '0';\n            this.video.style.transition = 'opacity 120ms linear';\n            const finishInitialStream = () => {\n                if (!this.initialStream || this._mainStreamReady) return;\n                this._mainStreamReady = true;\n                this.video.style.opacity = '1';\n                this.initialStream.style.opacity = '0';\n                setTimeout(() => {\n                    if (!this.initialStream || !this._mainStreamReady) return;\n                    this.initialStream.ondisconnect();\n                    this.initialStream.style.display = 'none';\n                }, 140);\n            };\n            this.video.addEventListener('playing', finishInitialStream);\n            this.video.addEventListener('loadeddata', finishInitialStream);\n        }\n\n        if (this.imageMode) {\n            this.staticImage = document.createElement('img');\n"""
+          if old not in s: raise SystemExit('renderMain image marker not found')
+          s=s.replace(old,new,1)
+
+          old="""        this.hass.callWS({\n            type: 'auth/sign_path', path: '/api/webrtc/ws'\n        }).then(data => {\n            if (this.config.poster && !this.config.poster_remote) {\n"""
+          new="""        this.hass.callWS({\n            type: 'auth/sign_path', path: '/api/webrtc/ws'\n        }).then(data => {\n            const buildStreamURL = stream => {\n                let url = 'ws' + this.hass.hassUrl(data.path).substring(4);\n                if (stream?.entity) url += '&entity=' + encodeURIComponent(stream.entity);\n                else if (stream?.url) url += '&url=' + encodeURIComponent(stream.url);\n                else return '';\n                if (stream?.server) url += '&server=' + encodeURIComponent(stream.server);\n                return url;\n            };\n            if (this.initialStream && this.config.initial_stream) {\n                const initial = typeof this.config.initial_stream === 'string'\n                    ? {url: this.config.initial_stream}\n                    : this.config.initial_stream;\n                const initialURL = buildStreamURL(initial);\n                if (initialURL) {\n                    this._mainStreamReady = false;\n                    this.initialStream.style.display = 'block';\n                    this.initialStream.style.opacity = '1';\n                    this.video.style.opacity = '0';\n                    this.initialStream.ondisconnect();\n                    this.initialStream.wsURL = initialURL;\n                    this.initialStream.onconnect();\n                }\n            }\n            if (this.config.poster && !this.config.poster_remote) {\n"""
+          if old not in s: raise SystemExit('onconnect signing marker not found')
+          s=s.replace(old,new,1)
+
+          old="""        if (joystickEnabled) {\n            const surface = dynamicJoystick ? player : fixedMove;\n            let activePointer = null, originX = 0, originY = 0, moving = false;\n"""
+          new="""        if (joystickEnabled) {\n            const surface = dynamicJoystick ? player : fixedMove;\n            if (dynamicJoystick) player.style.touchAction = 'none';\n            let activePointer = null, originX = 0, originY = 0, moving = false;\n"""
+          if old not in s: raise SystemExit('joystick opening block not found')
+          s=s.replace(old,new,1)
+
+          old="""            let lastPan = 0, lastTilt = 0, lastSpeed = 0, lastSend = 0, heartbeat = null;\n            let radius = fixedRadius, deadbandPx = 14;\n            const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);\n            const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);\n"""
+          new="""            let lastPan = 0, lastTilt = 0, lastSpeed = 0, lastSend = 0, heartbeat = null;\n            let stopRepeatTimer = null;\n            let radius = fixedRadius, deadbandPx = 14;\n            const updateMs = Math.max(40, parseInt(this.config.ptz.joystick_update_ms) || 100);\n            const heartbeatMs = Math.max(250, parseInt(this.config.ptz.joystick_heartbeat_ms) || 600);\n            const stopRepeatMs = Math.max(0, Number(this.config.ptz.joystick_stop_repeat_ms ?? 120));\n"""
+          if old not in s: raise SystemExit('joystick timer block not found')
+          s=s.replace(old,new,1)
+
+          old="""            const stopMove = () => {\n                if (heartbeat) clearInterval(heartbeat);\n                heartbeat = null;\n                if (moving) handle('joystick_stop');\n                moving = false; lastPan = lastTilt = lastSpeed = 0;\n                const stick = (dynamicJoystick ? dynamicMove : fixedMove).querySelector('.ptz-stick');\n                if (stick) stick.style.transform = 'translate(0px,0px)';\n                hideDynamic();\n            };\n"""
+          new="""            const stopMove = (force = false) => {\n                if (heartbeat) clearInterval(heartbeat);\n                heartbeat = null;\n                if (stopRepeatTimer) { clearTimeout(stopRepeatTimer); stopRepeatTimer = null; }\n                if (moving || force) handle('joystick_stop');\n                moving = false; lastPan = lastTilt = lastSpeed = 0;\n                if (force && stopRepeatMs > 0) {\n                    stopRepeatTimer = setTimeout(() => {\n                        stopRepeatTimer = null;\n                        if (activePointer === null && !moving) handle('joystick_stop');\n                    }, stopRepeatMs);\n                }\n                const stick = (dynamicJoystick ? dynamicMove : fixedMove).querySelector('.ptz-stick');\n                if (stick) stick.style.transform = 'translate(0px,0px)';\n                hideDynamic();\n            };\n"""
+          if old not in s: raise SystemExit('stopMove block not found')
+          s=s.replace(old,new,1)
+
+          old="""            const begin = ev => {\n                if (ev.pointerType === 'mouse' && ev.button !== 0) return;\n                if (dynamicJoystick && isDigitallyZoomed()) return;\n"""
+          new="""            const begin = ev => {\n                if (ev.pointerType === 'mouse' && ev.button !== 0) return;\n                if (dynamicJoystick && isDigitallyZoomed()) return;\n                if (stopRepeatTimer) { clearTimeout(stopRepeatTimer); stopRepeatTimer = null; }\n"""
+          if old not in s: raise SystemExit('begin block not found')
+          s=s.replace(old,new,1)
+
+          old='''                        stopMove();\n                    }\n                    return;\n'''
+          if old not in s: raise SystemExit('multitouch stop not found')
+          s=s.replace(old,'''                        stopMove(true);\n                    }\n                    return;\n''',1)
+          old='''                    stopMove();\n                    if (owned) { ev.preventDefault(); ev.stopPropagation(); }\n'''
+          if old not in s: raise SystemExit('pointer release stop not found')
+          s=s.replace(old,'''                    stopMove(true);\n                    if (owned) { ev.preventDefault(); ev.stopPropagation(); }\n''',1)
+          old='''if (activePointer===ev.pointerId) { activePointer=null; claimed=false; stopMove(); }'''
+          if old not in s: raise SystemExit('lost capture stop not found')
+          s=s.replace(old,'''if (activePointer===ev.pointerId) { activePointer=null; claimed=false; stopMove(true); }''',1)
+
+          p.write_text(s)
+          p=Path('custom_components/webrtc/manifest.json')
+          s=p.read_text()
+          if '"version": "3.6.12"' not in s: raise SystemExit('manifest version is not 3.6.12')
+          p.write_text(s.replace('"version": "3.6.12"','"version": "3.6.13"',1))
+          PY
+      - name: Validate
+        run: |
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Fix touch joystick stops and add initial stream"
+          git push

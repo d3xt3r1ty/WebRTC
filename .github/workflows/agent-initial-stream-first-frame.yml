@@ -1,0 +1,170 @@
+name: Patch initial stream first-frame handoff
+on:
+  push:
+    branches: [agent/initial-stream-first-frame]
+    paths: [.github/workflows/agent-initial-stream-first-frame.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+          old="""class WebRTCInitialStream extends VideoRTC {
+    oninit() {
+        super.oninit();
+        this.video.controls = false;
+        this.video.muted = true;
+        this.video.autoplay = true;
+        this.video.playsInline = true;
+        this.video.style.objectFit = 'contain';
+        this.video.style.background = 'black';
+    }
+}
+"""
+          new="""class WebRTCInitialStream extends VideoRTC {
+    oninit() {
+        super.oninit();
+        this.video.controls = false;
+        this.video.muted = true;
+        this.video.autoplay = true;
+        this.video.playsInline = true;
+        this.video.style.objectFit = 'contain';
+        this.video.style.background = 'black';
+        const reportFirstFrame = () => {
+            if (this._firstFrameReported) return;
+            const done = () => {
+                if (this._firstFrameReported) return;
+                this._firstFrameReported = true;
+                this.dispatchEvent(new CustomEvent('first-frame'));
+            };
+            if (typeof this.video.requestVideoFrameCallback === 'function') {
+                this.video.requestVideoFrameCallback(() => done());
+            } else {
+                requestAnimationFrame(done);
+            }
+        };
+        this.video.addEventListener('loadeddata', reportFirstFrame);
+        this.video.addEventListener('playing', reportFirstFrame);
+    }
+}
+"""
+          if old not in s: raise SystemExit('initial class block not found')
+          s=s.replace(old,new,1)
+
+          old="""            this.initialStream = document.createElement('webrtc-initial-stream');
+            this.initialStream.className = 'initial-stream';
+            const initialConfig = typeof this.config.initial_stream === 'object' ? this.config.initial_stream : {};
+            this.initialStream.mode = initialConfig.mode || this.config.mode;
+            this.initialStream.media = initialConfig.media || 'video';
+            this.initialStream.visibilityCheck = false;
+            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));
+            this.video.style.opacity = '0';
+            this.video.style.transition = 'opacity 120ms linear';
+            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.video.style.opacity = '1';
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            this.video.addEventListener('playing', finishInitialStream);
+            this.video.addEventListener('loadeddata', finishInitialStream);
+"""
+          new="""            this.initialStream = document.createElement('webrtc-initial-stream');
+            this.initialStream.className = 'initial-stream';
+            const initialConfig = typeof this.config.initial_stream === 'object' ? this.config.initial_stream : {};
+            this.initialStream.mode = initialConfig.mode || this.config.mode;
+            this.initialStream.media = initialConfig.media || 'video';
+            this.initialStream.visibilityCheck = false;
+            this.initialStream.addEventListener('first-frame', () => {
+                this._initialStreamReady = true;
+                const elapsed = this._initialStreamStartedAt ? Math.round(performance.now() - this._initialStreamStartedAt) : null;
+                console.debug('WebRTC initial_stream first frame', elapsed === null ? '' : `${elapsed}ms`);
+            });
+            this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));
+            this.video.style.opacity = '0';
+            this.video.style.transition = 'opacity 120ms linear';
+            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                const elapsed = this._mainStreamStartedAt ? Math.round(performance.now() - this._mainStreamStartedAt) : null;
+                console.debug('WebRTC main stream first frame', elapsed === null ? '' : `${elapsed}ms`, 'initial ready:', Boolean(this._initialStreamReady));
+                this.video.style.opacity = '1';
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            const mainMayHaveFrame = () => {
+                if (this._mainStreamReady) return;
+                if (typeof this.video.requestVideoFrameCallback === 'function') {
+                    this.video.requestVideoFrameCallback(() => finishInitialStream());
+                } else {
+                    requestAnimationFrame(finishInitialStream);
+                }
+            };
+            this.video.addEventListener('playing', mainMayHaveFrame);
+            this.video.addEventListener('loadeddata', mainMayHaveFrame);
+"""
+          if old not in s: raise SystemExit('initial render block not found')
+          s=s.replace(old,new,1)
+
+          old="""                if (initialURL) {
+                    this._mainStreamReady = false;
+                    this.initialStream.style.display = 'block';
+                    this.initialStream.style.opacity = '1';
+                    this.video.style.opacity = '0';
+                    this.initialStream.ondisconnect();
+                    this.initialStream.wsURL = initialURL;
+                    this.initialStream.onconnect();
+                }
+"""
+          new="""                if (initialURL) {
+                    this._mainStreamReady = false;
+                    this._initialStreamReady = false;
+                    this._initialStreamStartedAt = performance.now();
+                    this.initialStream._firstFrameReported = false;
+                    this.initialStream.style.display = 'block';
+                    this.initialStream.style.opacity = '1';
+                    this.video.style.opacity = '0';
+                    this.initialStream.ondisconnect();
+                    this.initialStream.wsURL = initialURL;
+                    this.initialStream.onconnect();
+                }
+"""
+          if old not in s: raise SystemExit('initial connect block not found')
+          s=s.replace(old,new,1)
+
+          old="""            if (super.onconnect()) {
+                this.setStatus('Loading...');
+"""
+          new="""            this._mainStreamStartedAt = performance.now();
+            if (super.onconnect()) {
+                this.setStatus('Loading...');
+"""
+          if old not in s: raise SystemExit('main connect block not found')
+          s=s.replace(old,new,1)
+          p.write_text(s)
+          PY
+      - name: Validate
+        run: node --check custom_components/webrtc/www/webrtc-camera.js
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js
+          git commit -m "Track initial and main first rendered frames"
+          git push

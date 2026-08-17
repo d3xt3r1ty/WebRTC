@@ -1,0 +1,67 @@
+name: Patch first-frame handoff final
+on:
+  push:
+    branches: [agent/initial-stream-first-frame]
+    paths: [.github/workflows/agent-first-frame-final.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+          old="""            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            this.video.addEventListener('playing', finishInitialStream);
+            this.video.addEventListener('loadeddata', finishInitialStream);
+"""
+          new="""            const finishInitialStream = () => {
+                if (!this.initialStream || this._mainStreamReady) return;
+                this._mainStreamReady = true;
+                this.initialStream.style.opacity = '0';
+                setTimeout(() => {
+                    if (!this.initialStream || !this._mainStreamReady) return;
+                    this.initialStream.ondisconnect();
+                    this.initialStream.style.display = 'none';
+                }, 140);
+            };
+            const waitForMainFrame = () => {
+                if (this._mainStreamReady) return;
+                if (typeof this.video.requestVideoFrameCallback === 'function') {
+                    this.video.requestVideoFrameCallback(() => finishInitialStream());
+                } else {
+                    requestAnimationFrame(() => finishInitialStream());
+                }
+            };
+            this.video.addEventListener('playing', waitForMainFrame);
+            this.video.addEventListener('loadeddata', waitForMainFrame);
+"""
+          if old not in s:
+              raise SystemExit('handoff block not found')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Validate
+        run: |
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js
+          git commit -m "Wait for main rendered frame before initial stream handoff"
+          git push

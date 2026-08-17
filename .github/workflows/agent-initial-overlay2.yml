@@ -1,0 +1,22 @@
+name: initial-overlay-fix
+on: [push]
+jobs:
+  patch:
+    if: github.ref == 'refs/heads/agent/initial-stream-first-frame'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: patch
+        run: |
+          python -c "from pathlib import Path; p=Path('custom_components/webrtc/www/webrtc-camera.js'); s=p.read_text(); s=s.replace('z-index: 0;\n                width: 100%;','z-index: 2;\n                width: 100%;',1).replace(\"this.querySelector('.player').insertBefore(this.initialStream, this.querySelector('.ptz-transform'));\\n            this.video.style.opacity = '0';\\n            this.video.style.transition = 'opacity 120ms linear';\",\"this.querySelector('.player').appendChild(this.initialStream);\",1).replace(\"this.video.style.opacity = '1';\\n                this.initialStream.style.opacity = '0';\",\"this.initialStream.style.opacity = '0';\",1).replace(\"this.initialStream.style.opacity = '1';\\n                    this.video.style.opacity = '0';\",\"this.initialStream.style.opacity = '1';\",1); p.write_text(s); m=Path('custom_components/webrtc/manifest.json'); x=m.read_text(); m.write_text(x.replace('\\\"version\\\": \\\"3.6.13\\\"','\\\"version\\\": \\\"3.6.14\\\"',1))"
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Render initial stream as overlay"
+          git push

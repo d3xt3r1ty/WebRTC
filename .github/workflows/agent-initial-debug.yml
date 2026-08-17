@@ -1,0 +1,92 @@
+name: Patch initial stream diagnostics
+on:
+  push:
+    branches: [agent/initial-stream-fix-3.6.14]
+    paths: [.github/workflows/agent-initial-debug.yml]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('custom_components/webrtc/www/webrtc-camera.js')
+          s=p.read_text()
+          s=s.replace("""class WebRTCInitialStream extends VideoRTC {
+    oninit() {
+        super.oninit();
+        this.video.controls = false;
+        this.video.muted = true;
+        this.video.autoplay = true;
+        this.video.playsInline = true;
+        this.video.style.objectFit = 'contain';
+        this.video.style.background = 'black';
+    }
+}
+""", """class WebRTCInitialStream extends VideoRTC {
+    oninit() {
+        super.oninit();
+        this.video.controls = false;
+        this.video.muted = true;
+        this.video.autoplay = true;
+        this.video.playsInline = true;
+        this.video.style.objectFit = 'contain';
+        this.video.style.background = 'black';
+        const firstFrame = () => {
+            if (this._firstFrameSeen) return;
+            const report = () => {
+                if (this._firstFrameSeen) return;
+                this._firstFrameSeen = true;
+                this.dispatchEvent(new CustomEvent('initial-frame'));
+            };
+            if (typeof this.video.requestVideoFrameCallback === 'function') this.video.requestVideoFrameCallback(report);
+            else requestAnimationFrame(report);
+        };
+        this.video.addEventListener('loadeddata', firstFrame);
+        this.video.addEventListener('playing', firstFrame);
+    }
+    onopen() {
+        this.dispatchEvent(new CustomEvent('initial-open'));
+        return super.onopen();
+    }
+}
+""",1)
+          s=s.replace("""            this.initialStream.visibilityCheck = false;
+            this.querySelector('.player').appendChild(this.initialStream);
+            const finishInitialStream = () => {
+""", """            this.initialStream.visibilityCheck = false;
+            this.initialStream.addEventListener('initial-open', () => console.info('[WebRTC initial_stream] websocket open'));
+            this.initialStream.addEventListener('initial-frame', () => console.info('[WebRTC initial_stream] first rendered frame'));
+            this.querySelector('.player').appendChild(this.initialStream);
+            const finishInitialStream = () => {
+""",1)
+          s=s.replace("""                    this.initialStream.ondisconnect();
+                    this.initialStream.wsURL = initialURL;
+                    this.initialStream.onconnect();
+""", """                    this.initialStream.ondisconnect();
+                    this.initialStream._firstFrameSeen = false;
+                    console.info('[WebRTC initial_stream] connect', initialURL);
+                    this.initialStream.src = initialURL;
+""",1)
+          # bump version for diagnostic build
+          m=Path('custom_components/webrtc/manifest.json')
+          ms=m.read_text()
+          if '"version": "3.6.14"' not in ms: raise SystemExit('expected 3.6.14')
+          m.write_text(ms.replace('"version": "3.6.14"','"version": "3.6.15"',1))
+          p.write_text(s)
+          PY
+      - name: Validate
+        run: |
+          node --check custom_components/webrtc/www/webrtc-camera.js
+          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
+      - name: Commit
+        run: |
+          git config user.name D3XT3R
+          git config user.email d3xt3rsl4b@gmail.com
+          git add custom_components/webrtc/www/webrtc-camera.js custom_components/webrtc/manifest.json
+          git commit -m "Use public VideoRTC source path and trace initial stream"
+          git push

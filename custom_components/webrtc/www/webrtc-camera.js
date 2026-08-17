@@ -377,8 +377,26 @@ class WebRTCCamera extends VideoRTC {
                     this.initialStream.style.display = 'none';
                 }, 140);
             };
-            this.video.addEventListener('playing', finishInitialStream);
-            this.video.addEventListener('loadeddata', finishInitialStream);
+            let mainFrameHandoffArmed = false;
+            const armMainFrameHandoff = () => {
+                if (mainFrameHandoffArmed || this._mainStreamReady) return;
+                mainFrameHandoffArmed = true;
+                if (typeof this.video.requestVideoFrameCallback === 'function') {
+                    this.video.requestVideoFrameCallback(() => {
+                        mainFrameHandoffArmed = false;
+                        finishInitialStream();
+                    });
+                    return;
+                }
+                requestAnimationFrame(() => {
+                    mainFrameHandoffArmed = false;
+                    if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && this.video.videoWidth > 0) {
+                        finishInitialStream();
+                    }
+                });
+            };
+            this.video.addEventListener('playing', armMainFrameHandoff);
+            this.video.addEventListener('loadeddata', armMainFrameHandoff);
         }
 
         if (this.imageMode) {

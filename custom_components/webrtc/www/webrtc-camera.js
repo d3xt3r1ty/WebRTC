@@ -72,6 +72,103 @@ if (WebRTCCamera && !WebRTCCamera.__v3618Patched) {
         return reusable;
     };
 
+    // Draw detection regions after DigitalPTZ has scaled/panned the image.
+    // The core overlay lives inside .ptz-transform, so it is itself transformed.
+    // Move it to the player and project normalized source boxes into final
+    // screen-space coordinates instead. This keeps boxes aligned and line width
+    // constant regardless of digital zoom or source/card aspect-ratio scaling.
+    WebRTCCamera.prototype.updateRegionOverlay = function() {
+        if (!this.regionOverlay || !this.digitalPTZ) return;
+        const cfg = this.config.digital_ptz?.region_overlay || {};
+        const {regions, primary} = this.getDigitalRegions();
+        this.regionOverlay.innerHTML = '';
+        this.regionOverlay.style.display = cfg.show === false || !regions.length ? 'none' : 'block';
+        if (this.regionOverlay.style.display === 'none') return;
+
+        const tr = this.digitalPTZ.transform;
+        if (!tr.videoRect || !tr.containerRect) return;
+
+        const containerWidth = tr.containerRect.width;
+        const containerHeight = tr.containerRect.height;
+        if (!(containerWidth > 0 && containerHeight > 0)) return;
+
+        // CSS transform is translate(...) scale(...) around the transform
+        // element's centre. Project the untransformed rendered-video rectangle
+        // through that same transform, then place normalized detections inside it.
+        const scale = Number(tr.scale) || 1;
+        const tx = (Number(tr.x) || 0) * tr.videoRect.width;
+        const ty = (Number(tr.y) || 0) * tr.videoRect.height;
+        const centreX = containerWidth / 2;
+        const centreY = containerHeight / 2;
+        const baseLeft = tr.videoRect.x - tr.containerRect.x;
+        const baseTop = tr.videoRect.y - tr.containerRect.y;
+        const left = centreX + (baseLeft - centreX) * scale + tx;
+        const top = centreY + (baseTop - centreY) * scale + ty;
+        const width = tr.videoRect.width * scale;
+        const height = tr.videoRect.height * scale;
+
+        this.regionOverlay.style.left = '0px';
+        this.regionOverlay.style.top = '0px';
+        this.regionOverlay.style.width = '100%';
+        this.regionOverlay.style.height = '100%';
+        this.regionOverlay.setAttribute('viewBox', `0 0 ${containerWidth} ${containerHeight}`);
+        this.regionOverlay.setAttribute('preserveAspectRatio', 'none');
+
+        const selection = String(cfg.selection ?? 'all').toLowerCase();
+        const selected = selection === 'primary' && primary !== null
+            ? [regions[primary]].filter(Boolean)
+            : regions;
+        const lineWidth = Math.max(0.5, Number(cfg.line_width ?? 2));
+
+        selected.forEach(region => {
+            const [rx1, ry1, rx2, ry2] = region.bbox.map(Number);
+            if (![rx1, ry1, rx2, ry2].every(Number.isFinite)) return;
+            const x1 = left + Math.min(rx1, rx2) * width;
+            const y1 = top + Math.min(ry1, ry2) * height;
+            const x2 = left + Math.max(rx1, rx2) * width;
+            const y2 = top + Math.max(ry1, ry2) * height;
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', String(x1));
+            rect.setAttribute('y', String(y1));
+            rect.setAttribute('width', String(Math.max(0, x2 - x1)));
+            rect.setAttribute('height', String(Math.max(0, y2 - y1)));
+            rect.setAttribute('stroke-width', String(lineWidth));
+            this.regionOverlay.appendChild(rect);
+        });
+    };
+
+    const renderDigitalPTZ = WebRTCCamera.prototype.renderDigitalPTZ;
+    WebRTCCamera.prototype.renderDigitalPTZ = function(...args) {
+        const result = renderDigitalPTZ.apply(this, args);
+
+        if (this.imageMode && this.regionOverlay && this.digitalPTZ) {
+            const player = this.querySelector?.('.player');
+            if (player && this.regionOverlay.parentElement !== player) {
+                player.appendChild(this.regionOverlay);
+            }
+            this.regionOverlay.style.zIndex = '3';
+
+            if (!this.digitalPTZ.__webrtcScreenOverlayPatched) {
+                this.digitalPTZ.__webrtcScreenOverlayPatched = true;
+                const render = this.digitalPTZ.render;
+                this.digitalPTZ.render = (...renderArgs) => {
+                    const renderResult = render(...renderArgs);
+                    requestAnimationFrame(() => this.updateRegionOverlay());
+                    return renderResult;
+                };
+                const onRectsChanged = this.digitalPTZ.onRectsChanged;
+                this.digitalPTZ.onRectsChanged = (...rectArgs) => {
+                    if (onRectsChanged) onRectsChanged(...rectArgs);
+                    this.updateRegionOverlay();
+                };
+            }
+
+            requestAnimationFrame(() => this.updateRegionOverlay());
+        }
+
+        return result;
+    };
+
     // The core deliberately waits until a touch leaves the joystick deadband
     // before claiming it. On mobile that leaves enough time for the browser or
     // another gesture recogniser to steal/cancel the pointer. Capture the first

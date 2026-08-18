@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - agent/mobile-joystick-aspect-3.6.18
+  pull_request:
 
 permissions:
   contents: write

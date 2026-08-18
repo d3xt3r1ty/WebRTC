@@ -46,14 +46,18 @@ class WebRTCCamera extends VideoRTC {
         }, seconds * 1000);
 
         WebRTCCamera.keepAliveRegistry = WebRTCCamera.keepAliveRegistry.filter(item => item.card !== this);
-        WebRTCCamera.keepAliveRegistry.push({card: this, detachedAt});
+        const group = String(this.config?.keep_alive_group || 'default');
+        WebRTCCamera.keepAliveRegistry.push({card: this, detachedAt, group});
 
         const max = Math.max(0, parseInt(this.config?.keep_alive_streams_max ?? 0));
         if (max > 0) {
-            WebRTCCamera.keepAliveRegistry.sort((a, b) => a.detachedAt - b.detachedAt);
-            while (WebRTCCamera.keepAliveRegistry.length > max) {
-                const oldest = WebRTCCamera.keepAliveRegistry.shift();
-                if (!oldest || oldest.card === this && max > 0 && WebRTCCamera.keepAliveRegistry.length < max) continue;
+            const groupItems = WebRTCCamera.keepAliveRegistry
+                .filter(item => (item.group || 'default') === group)
+                .sort((a, b) => a.detachedAt - b.detachedAt);
+            while (groupItems.length > max) {
+                const oldest = groupItems.shift();
+                if (!oldest) continue;
+                WebRTCCamera.keepAliveRegistry = WebRTCCamera.keepAliveRegistry.filter(item => item !== oldest);
                 if (oldest.card.keepAliveTID) {
                     clearTimeout(oldest.card.keepAliveTID);
                     oldest.card.keepAliveTID = 0;
@@ -81,6 +85,7 @@ class WebRTCCamera extends VideoRTC {
             streams: [{url: config.url, entity: config.entity}],
             poster_remote: config.poster && (config.poster.indexOf('://') > 0 || config.poster.charAt(0) === '/'),
             keep_alive: 0,
+            keep_alive_group: 'default',
             keep_alive_streams_max: 0,
         }, config);
 
@@ -243,6 +248,12 @@ class WebRTCCamera extends VideoRTC {
                         // Fast path: reuse the already-live browser MediaStream from a
                         // kept-alive source card. This creates no second WebRTC session.
                         this._initialStreamReused = true;
+                        const sourceStyle = getComputedStyle(reusable.video);
+                        if (sourceStyle.aspectRatio && sourceStyle.aspectRatio !== 'auto') {
+                            this.initialStream.video.style.aspectRatio = sourceStyle.aspectRatio;
+                        }
+                        if (sourceStyle.objectFit) this.initialStream.video.style.objectFit = sourceStyle.objectFit;
+                        if (sourceStyle.objectPosition) this.initialStream.video.style.objectPosition = sourceStyle.objectPosition;
                         this.initialStream.video.srcObject = reusableMedia;
                         this.initialStream.video.muted = true;
                         this.initialStream.video.play().catch(() => {});
@@ -380,6 +391,7 @@ class WebRTCCamera extends VideoRTC {
                 display: flex;
                 justify-content: space-between;
                 pointer-events: none;
+                z-index: 4;
             }
             .mode {
                 cursor: pointer;
@@ -1697,6 +1709,7 @@ class WebRTCCamera extends VideoRTC {
                     position: absolute;
                     top: 5px;
                     left: 5px;
+                    z-index: 4;
                 }
             </style>
         `);

@@ -4,6 +4,7 @@
 - Reused `initial_stream` now follows the source video's actual rendered box ratio, so forced overview presentation such as 16:9 carries through during handoff.
 - Mobile physical joystick now captures the first touch pointer immediately to preserve hold/drag updates, while a second touch releases that capture for DigitalPTZ pinch.
 - Detection overlays are now drawn in screen space after DigitalPTZ scale/pan, keeping bounding boxes aligned with the scaled image and preserving a constant line width.
+- `initial_stream` reconnects now request a fresh Home Assistant `auth/sign_path` URL before reopening `/api/webrtc/ws`, preventing expired `authSig` URLs from being retried every 15 seconds and contributing to HA IP bans.
 
 ## 3.6.17
 - Reused initial streams inherit the source video's computed aspect ratio, object-fit and object-position so dashboard presentation carries through during handoff.

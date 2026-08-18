@@ -4,6 +4,60 @@
 import './webrtc-camera-core.js?v=3.6.18';
 
 const WebRTCCamera = customElements.get('webrtc-camera');
+const WebRTCInitialStream = customElements.get('webrtc-initial-stream');
+
+// HA's auth/sign_path URLs are deliberately short-lived. The generic VideoRTC
+// reconnect loop reuses wsURL, which means an initial_stream can retry an
+// expired /api/webrtc/ws?authSig=... URL every RECONNECT_TIMEOUT and eventually
+// trigger Home Assistant's IP-ban threshold. Re-sign before every initial-stream
+// reconnect instead of replaying the stale URL.
+if (WebRTCInitialStream && !WebRTCInitialStream.__v3618SignedReconnectPatched) {
+    WebRTCInitialStream.__v3618SignedReconnectPatched = true;
+
+    WebRTCInitialStream.prototype.onclose = function() {
+        if (this.wsState === WebSocket.CLOSED) return false;
+
+        this.wsState = WebSocket.CONNECTING;
+        this.ws = null;
+
+        const delay = Math.max(this.RECONNECT_TIMEOUT - (Date.now() - this.connectTS), 0);
+        this.reconnectTID = setTimeout(async () => {
+            this.reconnectTID = 0;
+            if (!this.isConnected || this.style.display === 'none') return;
+
+            const host = this.getRootNode?.()?.host;
+            const hass = host?.hass;
+            const rawInitial = host?.config?.initial_stream;
+            const stream = typeof rawInitial === 'string' ? {url: rawInitial} : rawInitial;
+            if (!hass || !stream) {
+                this.ondisconnect();
+                return;
+            }
+
+            try {
+                const data = await hass.callWS({type: 'auth/sign_path', path: '/api/webrtc/ws'});
+                let url = 'ws' + hass.hassUrl(data.path).substring(4);
+                if (stream.entity) url += '&entity=' + encodeURIComponent(stream.entity);
+                else if (stream.url) url += '&url=' + encodeURIComponent(stream.url);
+                else {
+                    this.ondisconnect();
+                    return;
+                }
+                if (stream.server) url += '&server=' + encodeURIComponent(stream.server);
+
+                this.wsURL = url;
+                this.onconnect();
+            } catch (err) {
+                console.warn('WebRTC initial_stream: unable to refresh signed reconnect URL', err);
+                // Do not retry the stale signed URL. Leave the temporary preview
+                // disconnected; the parent main stream continues independently.
+                this.ondisconnect();
+            }
+        }, delay);
+
+        return true;
+    };
+}
 
 if (WebRTCCamera && !WebRTCCamera.__v3618Patched) {
     WebRTCCamera.__v3618Patched = true;

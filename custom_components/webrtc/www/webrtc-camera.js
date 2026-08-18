@@ -111,6 +111,7 @@ if (WebRTCCamera && !WebRTCCamera.__v3618Patched) {
         this.regionOverlay.style.top = '0px';
         this.regionOverlay.style.width = '100%';
         this.regionOverlay.style.height = '100%';
+        this.regionOverlay.style.overflow = 'hidden';
         this.regionOverlay.setAttribute('viewBox', `0 0 ${containerWidth} ${containerHeight}`);
         this.regionOverlay.setAttribute('preserveAspectRatio', 'none');
 
@@ -123,15 +124,20 @@ if (WebRTCCamera && !WebRTCCamera.__v3618Patched) {
         selected.forEach(region => {
             const [rx1, ry1, rx2, ry2] = region.bbox.map(Number);
             if (![rx1, ry1, rx2, ry2].every(Number.isFinite)) return;
-            const x1 = left + Math.min(rx1, rx2) * width;
-            const y1 = top + Math.min(ry1, ry2) * height;
-            const x2 = left + Math.max(rx1, rx2) * width;
-            const y2 = top + Math.max(ry1, ry2) * height;
+            const rawX1 = left + Math.min(rx1, rx2) * width;
+            const rawY1 = top + Math.min(ry1, ry2) * height;
+            const rawX2 = left + Math.max(rx1, rx2) * width;
+            const rawY2 = top + Math.max(ry1, ry2) * height;
+            const x1 = Math.max(0, Math.min(containerWidth, rawX1));
+            const y1 = Math.max(0, Math.min(containerHeight, rawY1));
+            const x2 = Math.max(0, Math.min(containerWidth, rawX2));
+            const y2 = Math.max(0, Math.min(containerHeight, rawY2));
+            if (x2 <= x1 || y2 <= y1) return;
             const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
             rect.setAttribute('x', String(x1));
             rect.setAttribute('y', String(y1));
-            rect.setAttribute('width', String(Math.max(0, x2 - x1)));
-            rect.setAttribute('height', String(Math.max(0, y2 - y1)));
+            rect.setAttribute('width', String(x2 - x1));
+            rect.setAttribute('height', String(y2 - y1));
             rect.setAttribute('stroke-width', String(lineWidth));
             this.regionOverlay.appendChild(rect);
         });

@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.6.18
+- Reused `initial_stream` now follows the source video's actual rendered box ratio, so forced overview presentation such as 16:9 carries through during handoff.
+- Mobile physical joystick now captures the first touch pointer immediately to preserve hold/drag updates, while a second touch releases that capture for DigitalPTZ pinch.
+
 ## 3.6.17
 - Reused initial streams inherit the source video's computed aspect ratio, object-fit and object-position so dashboard presentation carries through during handoff.
 - Card chrome now stays above the initial-stream overlay; shortcuts and header are explicitly layered with PTZ/audio controls.

@@ -1,28 +1,18 @@
-name: patch-3.6.16
+name: HACS validation
 
 on:
   push:
-    branches:
-      - agent/initial-stream-reuse-3.6.16
-
-permissions:
-  contents: write
+  pull_request:
 
 jobs:
-  patch:
-    runs-on: ubuntu-latest
+  hacs:
+    runs-on: "ubuntu-latest"
     steps:
-      - uses: actions/checkout@v4
-      - name: Apply production patch
-        run: python .github/patch_3616.py
-      - name: Validate
-        run: |
-          node --check custom_components/webrtc/www/webrtc-camera.js
-          python -m json.tool custom_components/webrtc/manifest.json >/dev/null
-      - name: Commit production change
-        run: |
-          git config user.name D3XT3R
-          git config user.email d3xt3rsl4b@gmail.com
-          git add -A
-          git commit -m "Reuse kept-alive substream during main-stream startup"
-          git push
+      - uses: "actions/checkout@v2"
+      - uses: "hacs/action@main"
+        with: { category: "integration" }
+  hassfest:
+    runs-on: "ubuntu-latest"
+    steps:
+      - uses: "actions/checkout@v3"
+      - uses: "home-assistant/actions/hassfest@master"

@@ -166,6 +166,29 @@ class WebRTCCamera extends VideoRTC {
         return this.config.streams[this.streamID].name || `S${this.streamID}`;
     }
 
+    static streamMatches(card, stream) {
+        if (!card?.config || !stream) return false;
+        if (stream.entity) return card.config.entity === stream.entity;
+        if (stream.url) return card.config.url === stream.url;
+        return false;
+    }
+
+    static reusableInitialStream(stream, exclude) {
+        const now = Date.now();
+        for (let i = WebRTCCamera.keepAliveRegistry.length - 1; i >= 0; i--) {
+            const item = WebRTCCamera.keepAliveRegistry[i];
+            const card = item?.card;
+            if (!card || card === exclude || !WebRTCCamera.streamMatches(card, stream)) continue;
+            const media = card.video?.srcObject;
+            const videoTrack = media?.getVideoTracks?.().find(track => track.readyState === 'live');
+            if (!videoTrack) continue;
+            const seconds = Math.max(0, Number(card.config?.keep_alive || 0));
+            if (seconds && now - item.detachedAt > seconds * 1000) continue;
+            return card;
+        }
+        return null;
+    }
+
     oninit() {
         super.oninit();
         this.renderMain();
@@ -213,8 +236,25 @@ class WebRTCCamera extends VideoRTC {
                     this.initialStream.style.display = 'block';
                     this.initialStream.style.opacity = '1';
                     this.initialStream.ondisconnect();
-                    this.initialStream.wsURL = initialURL;
-                    this.initialStream.onconnect();
+
+                    const reusable = WebRTCCamera.reusableInitialStream(initial, this);
+                    const reusableMedia = reusable?.video?.srcObject;
+                    if (reusableMedia) {
+                        // Fast path: reuse the already-live browser MediaStream from a
+                        // kept-alive source card. This creates no second WebRTC session.
+                        this._initialStreamReused = true;
+                        this.initialStream.video.srcObject = reusableMedia;
+                        this.initialStream.video.muted = true;
+                        this.initialStream.video.play().catch(() => {});
+                        console.debug('WebRTC initial_stream: reused kept-alive stream', initial.entity || initial.url);
+                    } else {
+                        // Fallback for direct navigation/no kept-alive source. Start a
+                        // normal initial-stream consumer in parallel; never delay main.
+                        this._initialStreamReused = false;
+                        this.initialStream.wsURL = initialURL;
+                        this.initialStream.onconnect();
+                        console.debug('WebRTC initial_stream: no reusable stream; opening fallback', initial.entity || initial.url);
+                    }
                 }
             }
             if (this.config.poster && !this.config.poster_remote) {

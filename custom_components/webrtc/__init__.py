@@ -58,7 +58,7 @@ HLS_SESSION = str(uuid.uuid4())
 async def async_setup(hass: HomeAssistant, config: dict):
     # 1. Serve lovelace card
     path = Path(__file__).parent / "www"
-    for name in ("video-rtc.js", "webrtc-camera.js", "digital-ptz.js"):
+    for name in ("video-rtc.js", "webrtc-camera.js", "webrtc-camera-core.js", "digital-ptz.js"):
         await utils.register_static_path(hass, "/webrtc/" + name, str(path / name))
 
     # 2. Add card to resources
@@ -82,7 +82,7 @@ async def async_setup(hass: HomeAssistant, config: dict):
         LINKS[link_id] = {
             "url": call.data.get("url"),
             "entity": call.data.get("entity"),
-            "limit": call.data["open_limit"],
+            "limit": call.data.get("open_limit"),
             "ts": time.time() + ttl if ttl else 0,
         }
 
@@ -119,7 +119,6 @@ async def async_setup(hass: HomeAssistant, config: dict):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
     # 1. If user set custom url
     go_url = entry.data.get(CONF_URL)
-
     # 2. Check if go2rtc running on same server
     if not go_url:
         go_url = await utils.check_go2rtc(hass)
@@ -181,6 +180,7 @@ async def ws_connect(hass: HomeAssistant, params: dict) -> str:
 
 def _get_image_from_entity_id(hass: HomeAssistant, entity_id: str):
     """Get camera component from entity_id."""
+
     if (component := hass.data.get("image")) is None:
         raise Exception("Image integration not set up")
 
